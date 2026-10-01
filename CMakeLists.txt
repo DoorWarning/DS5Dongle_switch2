@@ -127,6 +127,7 @@ add_executable(ds5-bridge
         src/switch_pro.cpp
         src/mode_toggle.cpp
         src/macro.cpp
+        src/switch_wake.cpp
 )
 
 if (ENABLE_DEBUG)
@@ -321,6 +322,12 @@ target_sources(ds5-bridge PRIVATE
         src/wake.cpp
         src/ps_shortcut.cpp
 )
+
+option(DS5_BLE_SCAN "Log Switch 2 wake beacons seen over BLE (experiment, use with ENABLE_SERIAL)" OFF)
+if(DS5_BLE_SCAN)
+    target_sources(ds5-bridge PRIVATE src/ble_scan.cpp)
+    target_compile_definitions(ds5-bridge PRIVATE DS5_BLE_SCAN=1)
+endif()
 
 option(WAKE_DEBUG "Print wake-FSM transitions to UART (developer use)" OFF)
 if(WAKE_DEBUG)

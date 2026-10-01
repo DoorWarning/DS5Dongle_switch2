@@ -34,6 +34,10 @@
 #endif
 #include "switch_pro.h"
 #include "mode_toggle.h"
+#include "switch_wake.h"
+#if DS5_BLE_SCAN
+#include "ble_scan.h"
+#endif
 
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
@@ -108,6 +112,7 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         if (len >= 66) {
             const auto *st = reinterpret_cast<const USBGetStateData *>(data + 3);
             mode_toggle_on_input(st->ButtonCreate, st->ButtonOptions, st->ButtonMute);
+            switch_wake_on_input(st->ButtonCreate, st->ButtonOptions, st->ButtonTriangle);
         }
         if (is_switch_pro_mode()) {
             if (len < 66) {
@@ -341,7 +346,8 @@ int main() {
     };
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
 #if !ENABLE_SERIAL
-    if (!usb_keyboard_only) {
+    // Switch Pro mode stays on the bus without a controller (see bt.cpp).
+    if (!usb_keyboard_only && !is_switch_pro_mode()) {
         sleep_ms(150);
         tud_disconnect();
     }
@@ -423,6 +429,10 @@ int main() {
 #endif
         button_check();
         mode_toggle_task();
+        switch_wake_task();
+#if DS5_BLE_SCAN
+        ble_scan_task();
+#endif
         bt_inquiring_led();
         dse_task();
     }

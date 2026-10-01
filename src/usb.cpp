@@ -11,6 +11,7 @@
 #include "utils.h"
 #include "usb.h"
 #include "wake.h"
+#include "switch_wake.h"
 #include "audio.h"
 #include "pico/time.h"
 
@@ -20,6 +21,10 @@ bool usb_keyboard_only = false;
 bool usb_reconfiguring = false;
 
 uint8_t usb_keyboard_instance() { return usb_keyboard_only ? 0 : 1; }
+
+bool usb_mounted() {
+    return tud_mounted();
+}
 
 void usb_reconnect(bool keyboard_only) {
     wake_note_usb_reconnect();
@@ -235,6 +240,7 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
     (void) instance;
     (void) len;
+    switch_wake_note_report_sent();
 }
 
 #ifndef ENABLE_WAKE_HID

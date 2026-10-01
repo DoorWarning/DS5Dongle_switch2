@@ -30,6 +30,10 @@
 #if PICO_RP2350
 #include "hardware/regs/sio.h"
 #endif
+#if DS5_BLE_SCAN
+#include "ble_scan.h"
+#endif
+#include "switch_wake.h"
 
 #define MTU_CONTROL 672
 #define MTU_INTERRUPT 672
@@ -374,6 +378,11 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
                                                     uint16_t size) {
     (void) channel;
 
+#if DS5_BLE_SCAN
+    ble_scan_on_hci_event(packet_type, packet, size);
+#endif
+    switch_wake_on_hci_event(packet_type, packet, size);
+
     const uint8_t event_type = hci_event_packet_get_type(packet);
 
     switch (event_type) {
@@ -603,7 +612,9 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             // wake is on (stay on the bus so a returning controller can signal a host wake) or
             // while the host is suspended -- hiding then re-showing re-enumerates, and a USB
             // re-connect wakes a sleeping host. Defer the hide until the host is awake.
-            if (!wake_enabled() && !tud_suspended()) {
+            // Switch Pro mode never hides: the Switch just sees an idle wired Pro Controller,
+            // and switch_wake.cpp needs the bus to tell when the console sleeps.
+            if (!wake_enabled() && !tud_suspended() && !is_switch_pro_mode()) {
                 tud_disconnect();
             }
 #endif
@@ -697,7 +708,12 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                         is_dse = false;
                     }
 #if !ENABLE_SERIAL
-                    usb_reconnect(false);
+                    // Re-enumerate to show the DS5 / DSE descriptors. The Switch Pro
+                    // descriptors don't depend on the controller, and the device stays
+                    // on the bus in that mode.
+                    if (!is_switch_pro_mode()) {
+                        usb_reconnect(false);
+                    }
 #endif
                 }
             }
@@ -774,6 +790,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                     printf("[L2CAP] Remote Interrupt MTU: %d\n", mtu);
 
                     wake_on_bt_connect();
+                    switch_wake_on_bt_connect();
 
                     gap_connectable_control(false);
                     gap_discoverable_control(false);

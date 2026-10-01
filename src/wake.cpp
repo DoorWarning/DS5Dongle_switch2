@@ -156,6 +156,10 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     WAKE_DBG("-> PENDING_PRESS");
 }
 
+bool wake_host_suspended(void) {
+    return host_suspended;
+}
+
 void wake_on_bt_connect(void) {
     if (!wake_enabled()) return;
     critical_section_enter_blocking(&wake_cs);
@@ -175,7 +179,7 @@ extern "C" void tud_resume_cb(void) {
     suspend_at_us = 0;   // resumed before the debounce elapsed -> cancel the disconnect
 
 #if !ENABLE_SERIAL
-    if (!bt_is_connected()) {
+    if (!bt_is_connected() && !is_switch_pro_mode()) { // Switch Pro mode stays on the bus
         if (!wake_enabled()) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {
@@ -196,7 +200,7 @@ extern "C" void tud_mount_cb(void) {
     // Remove the ghost controller on resume/re-enumeration; retain only the wake keyboard when enabled.
     // If USB keep-charging is enabled, the PC may show a ghost device after startup/resume.
 #if !ENABLE_SERIAL
-    if (!bt_is_connected()) {
+    if (!bt_is_connected() && !is_switch_pro_mode()) { // Switch Pro mode stays on the bus
         if (!wake_enabled()) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {

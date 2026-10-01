@@ -187,7 +187,13 @@ Config_body& get_config() {
 }
 
 bool is_switch_pro_mode() {
+#if ENABLE_SERIAL
+    // The Switch Pro USB config has no CDC interface, and a serial build waits
+    // for the COM port at boot, so serial builds always run in PC mode.
+    return false;
+#else
     return config.body.controller_mode == ControllerMode_SwitchPro;
+#endif
 }
 
 bool wake_enabled() {
