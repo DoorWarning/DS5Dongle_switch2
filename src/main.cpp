@@ -32,6 +32,8 @@
 #if ENABLE_BATT_LED
 #include "battery_led.h"
 #endif
+#include "switch_pro.h"
+#include "mode_toggle.h"
 
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
@@ -103,6 +105,27 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
             }
             return;
         }
+        if (len >= 66) {
+            const auto *st = reinterpret_cast<const USBGetStateData *>(data + 3);
+            mode_toggle_on_input(st->ButtonCreate, st->ButtonOptions, st->ButtonMute);
+        }
+        if (is_switch_pro_mode()) {
+            if (len < 66) {
+                return;
+            }
+            USBGetStateData ds5{};
+            memcpy(&ds5, data + 3, sizeof(ds5));
+            switch_pro_on_ds5_input(ds5);
+            if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
+                set_headset(data[56] & 1);
+            }
+            memcpy(interrupt_in_data, data + 3, 63);
+#if ENABLE_BATT_LED
+            battery_led_note_report();
+#endif
+            return;
+        }
+
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
             set_headset(data[56] & 1);
         }
@@ -182,6 +205,10 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
         return pico_cmd_get(report_id, buffer, reqlen);
     }
 
+    if (is_switch_pro_mode()) {
+        return switch_pro_get_report(report_id, buffer, reqlen);
+    }
+
     // DSE profiles: while the unlock + prefetch is still in progress, return 0
     // (NAK) for profile reads so the PS app retries rather than caching an
     // empty snapshot. Still kick off the background BT fetch.
@@ -236,6 +263,11 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         printf("[HID] Receive 0xf6 setting config, funcid:0x%02X\n", buffer[0]);
 #endif
         pico_cmd_set(report_id, buffer, bufsize);
+        return;
+    }
+
+    if (is_switch_pro_mode()) {
+        switch_pro_handle_hid_out(report_id, buffer, bufsize);
         return;
     }
 
@@ -301,7 +333,7 @@ int main() {
     board_init();
     config_load();
 #if !ENABLE_SERIAL
-    usb_keyboard_only = get_config().enable_wake;
+    usb_keyboard_only = wake_enabled();
 #endif
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
@@ -357,6 +389,7 @@ int main() {
     // Initialize the critical section for the report buffer
     critical_section_init(&report_cs);
     wake_init();
+    switch_pro_init();
 
     gpio_on_disconnect();
 
@@ -380,11 +413,16 @@ int main() {
 #if ENABLE_DEBUG
         debug_log_core1_stack_usage();
 #endif
-        interrupt_loop();
+        if (is_switch_pro_mode()) {
+            switch_pro_task();
+        } else {
+            interrupt_loop();
+        }
 #if ENABLE_BATT_LED
         battery_led_tick();
 #endif
         button_check();
+        mode_toggle_task();
         bt_inquiring_led();
         dse_task();
     }

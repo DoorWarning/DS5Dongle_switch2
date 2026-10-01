@@ -603,7 +603,7 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             // wake is on (stay on the bus so a returning controller can signal a host wake) or
             // while the host is suspended -- hiding then re-showing re-enumerates, and a USB
             // re-connect wakes a sleeping host. Defer the hide until the host is awake.
-            if (!get_config().enable_wake && !tud_suspended()) {
+            if (!wake_enabled() && !tud_suspended()) {
                 tud_disconnect();
             }
 #endif
@@ -619,7 +619,7 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             gpio_on_disconnect();
             wake_on_bt_disconnect();
 #if !ENABLE_SERIAL
-            if (get_config().enable_wake && !tud_suspended()) {
+            if (wake_enabled() && !tud_suspended()) {
                 usb_reconnect(true);
             }
 #endif

@@ -29,7 +29,7 @@ void ps_shortcut_reset() {
 
 void ps_shortcut_tick(const uint8_t *data, uint16_t len) {
     if (len < 10) return;
-    if (!get_config().ps_shortcut_enabled) return;
+    if (!ps_shortcut_active()) return;
 
     uint32_t now = to_ms_since_boot(get_absolute_time());
     bool raw_ps = (data[9] & 0x01) != 0;

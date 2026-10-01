@@ -122,6 +122,11 @@ add_executable(ds5-bridge
         src/cmd.cpp
         src/ram_mem.c
         src/fake_ds5.h
+        src/switch_hd_haptics.cpp
+        src/switch_hd_rumble.cpp
+        src/switch_pro.cpp
+        src/mode_toggle.cpp
+        src/macro.cpp
 )
 
 if (ENABLE_DEBUG)

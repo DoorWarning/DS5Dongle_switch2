@@ -144,7 +144,7 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     host_resumed_event = false;
     
     // Everything below is the wake-UP path (press a key to wake the host) -- enable_wake only.
-    if (!get_config().enable_wake) return;
+    if (!wake_enabled()) return;
 
     // Unconditionally re-arm on suspend. If a previous wake attempt hung
     // (e.g. Linux ignored a keystroke and left the endpoint busy forever),
@@ -157,7 +157,7 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
 }
 
 void wake_on_bt_connect(void) {
-    if (!get_config().enable_wake) return;
+    if (!wake_enabled()) return;
     critical_section_enter_blocking(&wake_cs);
     const bool should_wake = host_suspended &&
         (state == WAKE_IDLE || state == WAKE_DONE || state == WAKE_PENDING_PRESS);
@@ -176,7 +176,7 @@ extern "C" void tud_resume_cb(void) {
 
 #if !ENABLE_SERIAL
     if (!bt_is_connected()) {
-        if (!get_config().enable_wake) {
+        if (!wake_enabled()) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {
             usb_reconnect(true);
@@ -197,7 +197,7 @@ extern "C" void tud_mount_cb(void) {
     // If USB keep-charging is enabled, the PC may show a ghost device after startup/resume.
 #if !ENABLE_SERIAL
     if (!bt_is_connected()) {
-        if (!get_config().enable_wake) {
+        if (!wake_enabled()) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {
             usb_reconnect(true);
@@ -207,7 +207,7 @@ extern "C" void tud_mount_cb(void) {
 }
 
 void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
-    if (!get_config().enable_wake) return;
+    if (!wake_enabled()) return;
     if (len < 10) return;
     // DualSense BT 0x31 input report layout (after main.cpp's `data + 3` skip):
     //   byte 7 low nibble: D-pad direction (0x08 idle); high nibble: face buttons
@@ -267,7 +267,7 @@ void wake_task(void) {
     }
 
     // The wake-UP FSM below only runs when wake is enabled.
-    if (!get_config().enable_wake) return;
+    if (!wake_enabled()) return;
 
     critical_section_enter_blocking(&wake_cs);
     const wake_state_t s = state;

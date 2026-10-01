@@ -100,8 +100,8 @@ void config_valid() {
         body->audio_buffer_length = 48;
         printf("[Config] haptics_buffer_length is invalid\n");
     }
-    if (body->controller_mode > 2) {
-        body->controller_mode = 2;
+    if (body->controller_mode > ControllerMode_SwitchPro) {
+        body->controller_mode = ControllerMode_Auto;
         printf("[Config] controller_mode is invalid\n");
     }
     if (body->enable_usb_sn > 1) {
@@ -184,6 +184,18 @@ bool config_save() {
 
 Config_body& get_config() {
     return config.body;
+}
+
+bool is_switch_pro_mode() {
+    return config.body.controller_mode == ControllerMode_SwitchPro;
+}
+
+bool wake_enabled() {
+    return config.body.enable_wake && !is_switch_pro_mode();
+}
+
+bool ps_shortcut_active() {
+    return config.body.ps_shortcut_enabled && !is_switch_pro_mode();
 }
 
 void set_config(const uint8_t *new_config, const uint16_t len) {

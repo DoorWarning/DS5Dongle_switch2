@@ -7,6 +7,13 @@
 
 #include <cstdint>
 
+enum ControllerMode : uint8_t {
+    ControllerMode_DS5 = 0,
+    ControllerMode_DSE = 1,
+    ControllerMode_Auto = 2,
+    ControllerMode_SwitchPro = 3,
+};
+
 struct __attribute__((packed)) Config_body {
     uint8_t config_version; // Config Version
     float haptics_gain; // [1.0,2.0]
@@ -17,7 +24,7 @@ struct __attribute__((packed)) Config_body {
     uint8_t disable_pico_led; // bool
     uint8_t polling_rate_mode; // 0: 250Hz, 1: 500Hz, 2: real-time
     uint8_t audio_buffer_length; // [16,127]
-    uint8_t controller_mode; // 0: DS5, 1: DSE, 2: Auto
+    uint8_t controller_mode; // ControllerMode: 0: DS5, 1: DSE, 2: Auto, 3: Switch Pro
     uint8_t enable_usb_sn; // 0: disable,1: enable
     uint8_t ps_shortcut_enabled; // 0: disabled, 1: enabled (Xbox Game Bar via HID keyboard)
     uint8_t mic_select; // 0: auto, 1: builtin, 2: headphone, 3: disable
@@ -40,6 +47,9 @@ void config_default();
 void config_load();
 bool config_save();
 Config_body& get_config();
+bool is_switch_pro_mode();
+bool wake_enabled();
+bool ps_shortcut_active();
 void set_config(const uint8_t *new_config, const uint16_t len);
 void config_valid();
 void set_config(const Config_body &new_config);

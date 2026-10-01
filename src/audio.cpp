@@ -394,7 +394,7 @@ static void __not_in_flash_func(speaker_proc)() {
     if (!queue_try_remove(&audio_fifo, &audio_element)) {
         return;
     }
-    if (get_config().speaker_select == 3) {
+    if (get_config().speaker_select == 3 || encoder == nullptr) {
         return;
     }
     // 将 512 frames 重采样成 480 frames 以解决噪音问题。感谢 @Junhoo
@@ -435,7 +435,7 @@ static void __not_in_flash_func(mic_proc)() {
     if (!queue_try_remove(&mic_fifo, &mic_packet)) {
         return;
     }
-    if (!mic_active || get_config().mic_select == 3) {
+    if (!mic_active || get_config().mic_select == 3 || decoder == nullptr) {
         return;
     }
     static mic_decode_element decode_element{};
@@ -469,23 +469,29 @@ void __not_in_flash_func(core1_entry)() {
     // TODO: Search for initialization callbacks of core 0
     sleep_ms(300);
 
-    int error = 0;
-    encoder = opus_encoder_create(48000, 2,OPUS_APPLICATION_AUDIO, &error);
-    if (error != 0) {
-        printf("[Audio] OpusEncoder create failed\n");
-        return;
-    }
-    opus_encoder_ctl(encoder,OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
-    opus_encoder_ctl(encoder,OPUS_SET_BITRATE(200 * 8 * 100));
-    opus_encoder_ctl(encoder,OPUS_SET_VBR(false));
-    opus_encoder_ctl(encoder,OPUS_SET_COMPLEXITY(0)); // max 4
-    resampler_audio.SetMode(true, 0, false);
-    resampler_audio.SetRates(51200, 48000);
-    resampler_audio.SetFeedMode(true);
-    resampler_audio.Prealloc(2, 512, 480);
-    decoder = opus_decoder_create(48000, MIC_CHANNELS, &error);
-    if (error != 0) {
-        printf("[Audio] OpusDecoder create failed\n");
+    // Switch Pro mode has no USB audio, so skip the opus/resampler allocations
+    // (~70 KB of heap). The heap has only a few KB to spare in PC mode, and the
+    // Switch mode needs some of it for the macro recording buffer. Changing the
+    // mode reboots, so this is decided once per boot.
+    if (!is_switch_pro_mode()) {
+        int error = 0;
+        encoder = opus_encoder_create(48000, 2,OPUS_APPLICATION_AUDIO, &error);
+        if (error != 0) {
+            printf("[Audio] OpusEncoder create failed\n");
+            return;
+        }
+        opus_encoder_ctl(encoder,OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
+        opus_encoder_ctl(encoder,OPUS_SET_BITRATE(200 * 8 * 100));
+        opus_encoder_ctl(encoder,OPUS_SET_VBR(false));
+        opus_encoder_ctl(encoder,OPUS_SET_COMPLEXITY(0)); // max 4
+        resampler_audio.SetMode(true, 0, false);
+        resampler_audio.SetRates(51200, 48000);
+        resampler_audio.SetFeedMode(true);
+        resampler_audio.Prealloc(2, 512, 480);
+        decoder = opus_decoder_create(48000, MIC_CHANNELS, &error);
+        if (error != 0) {
+            printf("[Audio] OpusDecoder create failed\n");
+        }
     }
 
     while (true) {

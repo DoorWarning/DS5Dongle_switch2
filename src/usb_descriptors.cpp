@@ -33,10 +33,10 @@
 #endif
 
 bool ds_mode() {
-    if (get_config().controller_mode == 2) {
+    if (get_config().controller_mode == ControllerMode_Auto) {
         return !is_dse;
     }
-    return get_config().controller_mode == 0;
+    return get_config().controller_mode == ControllerMode_DS5;
 }
 
 enum {
@@ -126,11 +126,24 @@ tusb_desc_device_t desc_device =
 // Invoked when received GET DEVICE DESCRIPTOR
 // Application return pointer to descriptor
 uint8_t const *tud_descriptor_device_cb(void) {
-    desc_device.idProduct = ds_mode() ? 0x0CE6 : 0x0DF2;
-    desc_device.iSerialNumber = get_config().enable_usb_sn ? 0x03 : 0x00;
-    // USB 2.1 (so the host requests the BOS / MS OS 2.0 selective-suspend opt-in)
-    // only when wake is enabled; plain USB 2.0 otherwise.
-    desc_device.bcdUSB = get_config().enable_wake ? 0x0210 : 0x0200;
+    if (is_switch_pro_mode()) {
+        desc_device.bcdUSB = 0x0200;
+        desc_device.bDeviceClass = 0x00;
+        desc_device.bDeviceSubClass = 0x00;
+        desc_device.bDeviceProtocol = 0x00;
+        desc_device.idVendor = 0x057E;
+        desc_device.idProduct = 0x2009;
+        desc_device.bcdDevice = 0x0210;
+        desc_device.iSerialNumber = 0x03;
+    } else {
+        desc_device.idVendor = 0x054C;
+        desc_device.idProduct = ds_mode() ? 0x0CE6 : 0x0DF2;
+        desc_device.bcdDevice = 0x0100;
+        desc_device.iSerialNumber = get_config().enable_usb_sn ? 0x03 : 0x00;
+        // USB 2.1 (so the host requests the BOS / MS OS 2.0 selective-suspend opt-in)
+        // only when wake is enabled; plain USB 2.0 otherwise.
+        desc_device.bcdUSB = wake_enabled() ? 0x0210 : 0x0200;
+    }
     return reinterpret_cast<uint8_t const *>(&desc_device);
 }
 
@@ -142,6 +155,8 @@ uint8_t const *tud_descriptor_device_cb(void) {
 #define WAKE_KEYBOARD_DESCRIPTOR(itf) \
     TUD_HID_DESCRIPTOR(itf, 0, HID_ITF_PROTOCOL_KEYBOARD, 45, 0x87, 8, 10)
 #endif
+
+#include "switch_pro_descriptors.inc"
 
 uint8_t descriptor_configuration[] = {
     // --- CONFIGURATION DESCRIPTOR ---
@@ -433,6 +448,9 @@ static uint8_t const descriptor_keyboard_only[] = {
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void) index; // for multiple configurations
+    if (is_switch_pro_mode()) {
+        return descriptor_configuration_switch_pro;
+    }
 #ifdef ENABLE_WAKE_HID
     if (usb_keyboard_only) return descriptor_keyboard_only;
 #endif
@@ -460,8 +478,8 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     // Wake / Game Bar are runtime features. Advertise REMOTE_WAKEUP only when wake is
     // on, and include the keyboard interface (the LAST descriptor block) only when wake
     // OR the Game Bar shortcut is on. With both off this is byte-identical to the base.
-    const bool wake = get_config().enable_wake;
-    const bool kbd = wake || get_config().ps_shortcut_enabled;
+    const bool wake = wake_enabled();
+    const bool kbd = wake || ps_shortcut_active();
     descriptor_configuration[7] = wake ? 0xE0 : 0xC0; // bmAttributes (REMOTE_WAKEUP bit)
     const uint16_t total = kbd ? CONFIG_DESC_LEN_TOTAL
                                : (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_WAKE_KBD);
@@ -899,6 +917,9 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
     if (itf == usb_keyboard_instance()) return desc_hid_report_kbd;
 #endif
     (void) itf;
+    if (is_switch_pro_mode()) {
+        return desc_hid_report_switch_pro;
+    }
     if (ds_mode()) {
         return desc_hid_report_ds;
     }
@@ -929,9 +950,14 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     (void) langid;
     size_t chr_count;
 
-    if (ds_mode()) {
+    if (is_switch_pro_mode()) {
+        string_desc_arr[1] = "Nintendo Co., Ltd.";
+        string_desc_arr[2] = "Pro Controller";
+    } else if (ds_mode()) {
+        string_desc_arr[1] = "Sony Interactive Entertainment";
         string_desc_arr[2] = "DualSense Wireless Controller";
     }else {
+        string_desc_arr[1] = "Sony Interactive Entertainment";
         string_desc_arr[2] = "DualSense Edge Wireless Controller";
     }
 
@@ -946,14 +972,19 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             break;
 
         case STRID_SERIAL:
-            chr_count = board_usb_get_serial(_desc_str + 1, 32) + 1;
-            _desc_str[chr_count] = '2'; // refresh windows cache (bumped for 2-ch mic)
+            if (is_switch_pro_mode()) {
+                const char serial[] = "000000000001";
+                chr_count = sizeof(serial) - 1;
+                for (size_t i = 0; i < chr_count; i++) {
+                    _desc_str[1 + i] = serial[i];
+                }
+            } else {
+                chr_count = board_usb_get_serial(_desc_str + 1, 32) + 1;
+                _desc_str[chr_count] = '2'; // refresh windows cache (bumped for 2-ch mic)
+            }
             break;
 
         default:
-            // Note: the 0xEE index string is a Microsoft OS 1.0 Descriptors.
-            // https://docs.microsoft.com/en-us/windows-hardware/drivers/usbcon/microsoft-defined-usb-descriptors
-
             if (!(index < sizeof(string_desc_arr) / sizeof(string_desc_arr[0]))) return NULL;
 
             const char *str = string_desc_arr[index];
@@ -1017,7 +1048,7 @@ uint8_t const desc_bos[] = {
 uint8_t const *tud_descriptor_bos_cb(void) {
     // BOS carries the MS OS 2.0 selective-suspend opt-in, only meaningful for wake.
     // When wake is off the device is USB 2.0 and the host won't ask -- guard anyway.
-    if (!get_config().enable_wake) return nullptr;
+    if (!wake_enabled()) return nullptr;
     return desc_bos;
 }
 
@@ -1062,7 +1093,7 @@ TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "MS OS 2.0 descript
 // platform capability, then issues this vendor request to fetch the
 // descriptor set itself.
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
-    if (!get_config().enable_wake) return false;
+    if (!wake_enabled()) return false;
     if (stage != CONTROL_STAGE_SETUP) return true;
     if (request->bmRequestType_bit.type != TUSB_REQ_TYPE_VENDOR) return false;
     if (request->bRequest == MS_OS_20_VENDOR_CODE && request->wIndex == 7) {
