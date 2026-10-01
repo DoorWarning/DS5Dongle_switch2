@@ -167,6 +167,10 @@ int bt_init() {
 
     hci_event_callback_registration.callback = &hci_packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
+    // Runs before BTstack auto-accepts an incoming connection; 0 declines it (reason 0x0F).
+    gap_register_classic_connection_filter([](bd_addr_t addr, hci_link_type_t) -> int {
+        return switch_wake_defer_connection(addr) ? 0 : 1;
+    });
 
     hci_power_control(HCI_POWER_ON);
     return 0;
@@ -590,6 +594,9 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
             // 这个是按 PS 键重连的时候才会触发
             printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
+            if (switch_wake_take_deferred()) {
+                break; // declined by the connection filter: Switch 2 wake beacon first
+            }
             if (bt_blacklist_contains(addr)) {
                 printf("[HCI] Rejecting connection from %s (MAC is on persistent blacklist; re-pair via PS+Share)\n",
                        bd_addr_to_str(addr));

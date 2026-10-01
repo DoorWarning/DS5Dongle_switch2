@@ -63,6 +63,13 @@ constexpr uint32_t UNMOUNTED_ASLEEP_MS = 5000;
 constexpr uint32_t AWAKE_WINDOW_MS = 1000;
 constexpr uint16_t AWAKE_REPORTS = 10;
 
+// While the console sleeps, the DualSense's reconnect is declined (it keeps
+// paging) and the beacon goes out at once: waking, the dock cycles USB power,
+// which would drop an accepted link and power the DualSense off. After the
+// reboot the console is awake and the next page is accepted, so one PS press
+// does both. Declining stops after this long, for hosts that don't reboot us.
+constexpr uint32_t DEFER_CONNECT_MS = 10000;
+
 constexpr int64_t LEARN_HOLD_US = 3000000;
 constexpr uint32_t LEARN_MS = 60000;
 
@@ -119,6 +126,8 @@ uint32_t report_window_ms = 0;
 bool wake_requested = false;
 uint32_t wake_end_ms = 0;
 bd_addr_t own_addr{};
+uint32_t defer_until_ms = 0;  // 0 = not deferring the DualSense's reconnect
+bool connection_deferred = false;
 
 absolute_time_t learn_combo_since = nil_time;
 bool learn_combo_fired = false;
@@ -278,6 +287,7 @@ void update_console_state(uint32_t now) {
     if (now - report_window_ms >= AWAKE_WINDOW_MS) {
         if (console_asleep && reports_sent >= AWAKE_REPORTS) {
             console_asleep = false;
+            defer_until_ms = 0;
             printf("[Wake] console awake\n");
         }
         reports_sent = 0;
@@ -447,8 +457,47 @@ void switch_wake_on_hci_event(uint8_t packet_type, const uint8_t *packet, uint16
     }
 }
 
+bool switch_wake_defer_connection(const uint8_t addr[6]) {
+    if (!is_switch_pro_mode() || !console_asleep || !record_valid(stored_record())) {
+        return false;
+    }
+    // Only a controller this dongle is paired with counts as a wake request.
+    bd_addr_t a;
+    memcpy(a, addr, sizeof(a));
+    link_key_t key;
+    link_key_type_t type;
+    if (!gap_get_link_key_for_bd_addr(a, key, &type)) {
+        return false;
+    }
+    const uint32_t now = now_ms();
+    if (defer_until_ms == 0) {
+        defer_until_ms = now + DEFER_CONNECT_MS;
+        wake_requested = true;
+        printf("[Wake] reconnect from %s while the console sleeps: deferring it\n", bd_addr_to_str(a));
+    }
+    if (static_cast<int32_t>(now - defer_until_ms) >= 0) {
+        return false; // still not rebooted by the dock: accept after all
+    }
+    // BTstack declines with 0x0F (security reasons), after which the DualSense gave
+    // up and powered off. Decline first with 0x0D (limited resources) in the hope it
+    // retries; BTstack's own 0x0F reject that follows then finds no pending request.
+    if (hci_can_send_command_packet_now()) {
+        hci_send_cmd(&hci_reject_connection_request, a,
+                     ERROR_CODE_CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES);
+    }
+    connection_deferred = true;
+    return true;
+}
+
+bool switch_wake_take_deferred() {
+    const bool deferred = connection_deferred;
+    connection_deferred = false;
+    return deferred;
+}
+
 void switch_wake_on_bt_connect() {
-    if (!is_switch_pro_mode() || !console_asleep) {
+    // A reconnect deferred earlier has already sent the beacon.
+    if (!is_switch_pro_mode() || !console_asleep || defer_until_ms != 0) {
         return;
     }
     if (!record_valid(stored_record())) {
