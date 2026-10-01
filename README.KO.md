@@ -130,7 +130,7 @@ cmake --build build --target ds5-bridge   # → build/ds5-bridge.uf2
 - 스위치 1 본체, 다른 독, 휴대 모드는 시험하지 않았습니다.
 
 ## 브랜치와 태그
-- `switch-port`: 이 포크의 메인 브랜치
+- `main`: 이 포크의 메인 브랜치 (원본 `c67c7f6` 위에 스위치 작업을 얹은 것)
 - 태그 `switch-wake-v1`: 실기에서 깨우기를 확인한 버전
 - `switch-wake-single-ps`: PS 한 번으로 끝내기 실험 (실패, 기록용)
 
