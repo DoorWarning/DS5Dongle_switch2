@@ -1,4 +1,7 @@
 build
+build-*/
+# private notes, captures and firmware files (not for the public repo)
+local/
 .deps
 .vscode
 .idea

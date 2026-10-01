@@ -1,6 +1,11 @@
 MIT License
 
 Copyright (c) 2026 awalol
+Copyright (c) 2026 Demogorgon314 (Switch Pro mode, HD rumble)
+Copyright (c) 2026 DoorWarning (Switch port, macros, Switch 2 wake)
+
+src/audio.cpp is licensed separately under the Mozilla Public License 2.0;
+see THIRD_PARTY_NOTICES.md for this and other bundled components.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

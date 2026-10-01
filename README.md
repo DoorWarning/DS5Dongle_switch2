@@ -1,3 +1,42 @@
+# DS5Dongle: Switch Pro + Switch 2 wake fork
+
+[한국어](./README.KO.md)
+
+This fork of [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) adds a **Nintendo Switch mode**. The DualSense shows up on a Switch / Switch 2 dock as a wired Pro Controller, and the PS button can **wake a sleeping Switch 2**. PC mode works the same as upstream. The upstream README follows [below](#pico2w-dualsense-5-bridge).
+
+### What this fork adds
+
+- **Switch Pro mode.** The dongle enumerates as a wired Pro Controller (`057E:2009`) and converts HD rumble into DualSense haptics. It is ported from [Demogorgon314/DS5Dongle](https://github.com/Demogorgon314/DS5Dongle) (`ds5-to-switchpro` branch, commit `13c191b`) onto upstream `c67c7f6`.
+- **Mode toggle.** Hold Create + Options + Mute for 2 s to switch between Switch Pro and PC (Auto). The setting is saved and the dongle reboots. The Pico LED blinks 2× for Switch and 1× for PC.
+- **Macros** (Switch mode). There are 4 slots, on Mute + ○/✕/△/□.
+  - Tap: play once.
+  - Hold 1–3 s: loop.
+  - Hold 3 s: arm recording. Recording starts when you release.
+  - Mute alone stops recording or playback.
+- **Switch 2 wake from sleep** (Switch mode). Press PS while the console sleeps and the console turns on. Then press PS once more to reconnect the DualSense.
+  - A wired Pro Controller cannot wake a Switch 2, but a Joy-Con 2's BLE wake beacon can. The dongle learns that beacon once, then replays it from the Joy-Con's address.
+  - **Learn once:** plug the dongle into a PC or charger (not the dock), connect the DualSense and hold **Create + Options + △ for 3 s**. The LED blinks slowly. Put the console to sleep and press HOME on a detached Joy-Con 2. The LED blinks 5× fast when the beacon is saved.
+  - **Why PS twice:** when the console wakes, the dock cycles USB power, which reboots the dongle and drops the DualSense link.
+- In Switch mode the dongle stays on the USB bus without a controller, so the Switch sees an idle wired Pro Controller.
+
+Details and findings, in Korean: [README.KO.md](./README.KO.md).
+
+### Status
+
+Tested on one Switch 2 (docked) with a Pico 2 W and a DualSense. PC mode is unchanged from upstream, apart from about 1.5 KB of extra RAM. That RAM is tight: core1's opus allocations leave only a few KB of heap.
+
+### Credits and license
+
+- [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle): the base firmware (MIT).
+- [Demogorgon314/DS5Dongle](https://github.com/Demogorgon314/DS5Dongle): the Switch Pro mode and HD rumble code (MIT).
+- [alexvnesta/switch2controller](https://github.com/alexvnesta/switch2controller): research on the Switch 2 BLE wake beacon.
+
+The code is MIT, except `src/audio.cpp`, which is MPL-2.0. Bundled and linked components are listed in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+
+This is an unofficial project, not affiliated with or endorsed by Nintendo or Sony. Nintendo Switch, Joy-Con, DualSense and PlayStation are trademarks of their respective owners. Vendor/product IDs and names are used only for interoperability.
+
+---
+
 # Pico2W DualSense 5 Bridge
 
 [中文](./README.CN.md)
