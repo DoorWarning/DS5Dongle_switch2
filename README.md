@@ -23,7 +23,7 @@ Details and findings, in Korean: [README.KO.md](./README.KO.md).
 
 ### Status
 
-Tested on one Switch 2 (docked) with a Pico 2 W and a DualSense. PC mode is unchanged from upstream, apart from about 1.5 KB of extra RAM. That RAM is tight: core1's opus allocations leave only a few KB of heap.
+Tested on one Switch 2 in the official dock, with a Pico 2 W and a DualSense. Sleep wake works only on the Switch 2, because it uses the Joy-Con 2 BLE beacon; a Switch 1 wakes a different way (classic Bluetooth paging), which this fork does not support. Switch Pro mode may also work on a Switch 1, in Switch 2 handheld mode over USB-C, or with other docks, but none of these were tested. PC mode is unchanged from upstream, apart from about 1.5 KB of extra RAM. That RAM is tight: core1's opus allocations leave only a few KB of heap.
 
 ### Credits and license
 
