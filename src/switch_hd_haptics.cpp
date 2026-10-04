@@ -13,6 +13,7 @@
 #include "config.h"
 #include "pico/time.h"
 #include "switch_hd_rumble.h"
+#include "switch_settings.h"
 
 namespace {
 
@@ -61,6 +62,7 @@ uint32_t last_packet_us = 0;
 uint32_t last_update_us = 0;
 uint8_t zero_packets_remaining = 0;
 bool packet_requested = false;
+bool silenced = false; // vibration level 0: the zero packet went out
 
 float clampf(float value, float min_value, float max_value) {
     return std::min(std::max(value, min_value), max_value);
@@ -309,7 +311,20 @@ void switch_hd_haptics_task() {
         return;
     }
 
-    const float gain = std::max(get_config().haptics_gain, 1.0f);
+    // Level 0 = off: one zero packet, then nothing (saves the controller's battery).
+    const float gain = switch_settings_vibration_scale();
+    if (gain <= 0.0f) {
+        if (!silenced) {
+            int8_t zero[DS5_HAPTIC_SAMPLE_SIZE]{};
+            send_haptics_packet(zero);
+            silenced = true;
+        }
+        last_packet_us = now;
+        packet_requested = false;
+        zero_packets_remaining = 0;
+        return;
+    }
+    silenced = false;
     int8_t haptics[DS5_HAPTIC_SAMPLE_SIZE]{};
     for (uint8_t frame = 0; frame < DS5_HAPTIC_FRAMES_PER_PACKET; ++frame) {
         const float left = render_voice(voices[0]);
@@ -325,6 +340,15 @@ void switch_hd_haptics_task() {
     send_haptics_packet(haptics);
     last_packet_us = now;
     packet_requested = false;
+}
+
+void switch_hd_haptics_test_pulse() {
+    for (RumbleVoice &voice : voices) {
+        voice.low.target_freq_hz = 160.0f;
+        voice.low.target_amp = 0.7f;
+    }
+    last_update_us = time_us_32(); // SWITCH_RUMBLE_TIMEOUT_US later the task fades it out
+    packet_requested = true;
 }
 
 void switch_hd_haptics_stop() {

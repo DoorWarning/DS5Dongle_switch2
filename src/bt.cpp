@@ -34,6 +34,7 @@
 #include "ble_scan.h"
 #endif
 #include "switch_wake.h"
+#include "switch_settings.h"
 
 #define MTU_CONTROL 672
 #define MTU_INTERRUPT 672
@@ -791,6 +792,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
 
                     wake_on_bt_connect();
                     switch_wake_on_bt_connect();
+                    switch_settings_on_connect();
 
                     gap_connectable_control(false);
                     gap_discoverable_control(false);

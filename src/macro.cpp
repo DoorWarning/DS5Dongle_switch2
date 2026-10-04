@@ -365,3 +365,18 @@ void macro_task() {
     watchdog_update();
     printf("[Macro] save slot %d rc=%d\n", slot, rc);
 }
+
+void macro_restore_mute_light() {
+    switch (state) {
+        case State::RecordArmed:
+        case State::Recording:
+            set_mute_light(MuteLight::Breathing);
+            break;
+        case State::Playing:
+            set_mute_light(play_loop ? MuteLight::On : MuteLight::Off);
+            break;
+        default:
+            set_mute_light(MuteLight::Off);
+            break;
+    }
+}

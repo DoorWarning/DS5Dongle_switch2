@@ -12,6 +12,7 @@
 #include "config.h"
 #include "pico/critical_section.h"
 #include "switch_hd_haptics.h"
+#include "switch_settings.h"
 #include "pico/time.h"
 #include "tusb.h"
 
@@ -24,7 +25,6 @@ constexpr uint8_t SWITCH_PRO_REPORT_SIZE = 63;
 constexpr uint8_t SWITCH_PRO_IMU_SAMPLES = 3;
 constexpr uint8_t SWITCH_PRO_TIMER_STEP = SWITCH_PRO_IMU_SAMPLES;
 constexpr uint8_t SWITCH_PRO_IMU_HISTORY_SIZE = 24;
-constexpr uint8_t DS5_TRIGGER_THRESHOLD = 32;
 constexpr uint8_t SWITCH_PRO_DEVICE_TYPE = 0x03;
 constexpr uint32_t DS5_SENSOR_TIMESTAMP_TICKS_PER_US = 3;
 constexpr int32_t DS5_EFFECTIVE_GYRO_RES_PER_DEG_S = 16;
@@ -722,6 +722,7 @@ SwitchImu switch_imu_from_ds5(const Ds5Imu &imu) {
 
 void switch_pro_init() {
     macro_init();
+    switch_settings_init();
     if (!switch_pro_cs_ready) {
         critical_section_init(&switch_pro_cs);
         switch_pro_cs_ready = true;
@@ -742,7 +743,7 @@ void switch_pro_on_ds5_input(const USBGetStateData &ds5) {
     if (ds5.ButtonCross) state[2] |= 0x04;    // South
     if (ds5.ButtonCircle) state[2] |= 0x08;   // East
     if (ds5.ButtonR1) state[2] |= 0x40;
-    if (ds5.ButtonR2 || ds5.TriggerRight > DS5_TRIGGER_THRESHOLD) state[2] |= 0x80;
+    if (switch_settings_trigger_pressed(ds5.ButtonR2, ds5.TriggerRight)) state[2] |= 0x80;
 
     if (ds5.ButtonCreate) state[3] |= 0x01;  // Minus
     if (ds5.ButtonOptions) state[3] |= 0x02; // Plus
@@ -753,11 +754,12 @@ void switch_pro_on_ds5_input(const USBGetStateData &ds5) {
 
     state[4] |= dpad_to_bits(ds5.DPad);
     if (ds5.ButtonL1) state[4] |= 0x40;
-    if (ds5.ButtonL2 || ds5.TriggerLeft > DS5_TRIGGER_THRESHOLD) state[4] |= 0x80;
+    if (switch_settings_trigger_pressed(ds5.ButtonL2, ds5.TriggerLeft)) state[4] |= 0x80;
 
     encode_stick(state, 5, u8_to_u12(ds5.LeftStickX), u8_to_u12_inverted(ds5.LeftStickY));
     encode_stick(state, 8, u8_to_u12(ds5.RightStickX), u8_to_u12_inverted(ds5.RightStickY));
     macro_process(state + 2, ds5.ButtonMute, ds5.ButtonCircle, ds5.ButtonCross, ds5.ButtonTriangle, ds5.ButtonSquare);
+    switch_settings_on_input(ds5, state + 2);
 
     const bool has_imu = switch_pro_imu_enabled;
     SwitchImu switch_imu{};
@@ -782,6 +784,7 @@ void switch_pro_task() {
     }
     switch_hd_haptics_task();
     macro_task();
+    switch_settings_task();
     drain_pending_report();
     send_state_if_due();
 }
