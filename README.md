@@ -13,6 +13,7 @@ This fork of [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) adds a **Ni
   - Hold 1–3 s: loop.
   - Hold 3 s: arm recording. Recording starts when you release.
   - Mute alone stops recording or playback.
+  - Clear a slot: arm recording, release everything, then press Mute with no input. An empty recording saves the slot as empty.
 - **Vibration strength** (Switch mode). Mute + D-pad ↑/↓ steps through levels 0–5: 0 is off, then 20 % steps. The default is 3 (60 %), and 5 matches the old strength. The level shows on the DualSense player LEDs, with a short test pulse.
 - **Trigger modes** (Switch mode). Mute + D-pad →/← cycles 1 Normal, 2 Click, 3 Short (button-like) and 4 Auto (vibrating). These use DualSense adaptive trigger effects, and ZL/ZR fire at the matching point of the travel. The mode number shows as mute LED blinks. Both settings are saved in flash.
 - **Switch 2 wake from sleep** (Switch mode). Press PS while the console sleeps and the console turns on. Then press PS once more to reconnect the DualSense.
