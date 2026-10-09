@@ -4,7 +4,7 @@
 // BLE beacon a Joy-Con 2 sends when HOME is pressed. The console only accepts it
 // from the controller's own (public) address, so the dongle:
 //  - learns (any mode, learn mode started with Create + Options + Triangle held
-//    LEARN_HOLD_US): scans for that beacon for LEARN_MS and stores the sender
+//    LEARN_HOLD_US or from the manager app): scans for that beacon for LEARN_MS and stores the sender
 //    address + payload in flash. Do it with the dongle on a PC or charger: the
 //    dock limits USB power while the console sleeps.
 //  - wakes (Switch Pro mode): when the DualSense reconnects while the console
@@ -123,6 +123,8 @@ bd_addr_t own_addr{};
 absolute_time_t learn_combo_since = nil_time;
 bool learn_combo_fired = false;
 bool learn_requested = false;
+bool learn_cancel_requested = false;
+bool forget_requested = false;
 bool learning = false;
 uint32_t learn_until_ms = 0;
 bool save_pending = false;
@@ -197,6 +199,23 @@ void save_flash_op(void *param) {
     flash_range_erase(WAKE_FLASH_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(WAKE_FLASH_OFFSET, page, FLASH_PAGE_SIZE);
     restore_interrupts(interrupts);
+}
+
+void erase_flash_op(void *) {
+    const uint32_t interrupts = save_and_disable_interrupts();
+    flash_range_erase(WAKE_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+    restore_interrupts(interrupts);
+}
+
+// Main loop only (flash_safe_execute).
+void erase_record() {
+    if (!record_valid(stored_record())) {
+        return;
+    }
+    watchdog_update();
+    const int rc = flash_safe_execute(erase_flash_op, nullptr, 1000);
+    watchdog_update();
+    printf("[Wake] beacon forgotten rc=%d\n", rc);
 }
 
 // Main loop only (flash_safe_execute).
@@ -391,6 +410,26 @@ bool switch_wake_store_beacon(const uint8_t addr[6], const uint8_t data[31]) {
     return save_record(make_record(addr, data));
 }
 
+bool switch_wake_beacon_learned() {
+    return record_valid(stored_record());
+}
+
+void switch_wake_set_learning(bool on) {
+    if (on) {
+        learn_requested = true;
+    } else {
+        learn_cancel_requested = true;
+    }
+}
+
+bool switch_wake_learning() {
+    return learning || learn_requested;
+}
+
+void switch_wake_forget() {
+    forget_requested = true;
+}
+
 void switch_wake_note_report_sent() {
     reports_sent++;
 }
@@ -473,6 +512,15 @@ void switch_wake_task() {
     if (learning && static_cast<int32_t>(now - learn_until_ms) >= 0) {
         learning = false;
         printf("[Wake] learn mode timed out\n");
+    }
+    if (learn_cancel_requested) {
+        learn_cancel_requested = false;
+        learning = false;
+    }
+    if (forget_requested) {
+        forget_requested = false;
+        learning = false;
+        erase_record();
     }
     if (!active() && led_blinks_left == 0 && !led_owned) {
         return;

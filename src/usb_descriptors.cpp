@@ -407,8 +407,8 @@ uint8_t descriptor_configuration[] = {
     0x00, // bCountryCode: Not localized
     0x01, // bNumDescriptors: 1 report descriptor
     0x22, // bDescriptorType: Report
-    0x41, 0x01, // wDescriptorLength: 321 (0x0141) DS
-    // 0xB5, 0x01, // wDescriptorLength: 437 (0x01B5) DSE
+    0x49, 0x01, // wDescriptorLength: 329 (0x0149) DS
+    // 0xBD, 0x01, // wDescriptorLength: 445 (0x01BD) DSE
 
     // Endpoint Descriptor (HID IN: EP4)
     0x07, // bLength
@@ -469,10 +469,12 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     constexpr auto offset = CONFIG_DESC_LEN_BASE;
     descriptor_configuration[offset - 1] = bInterval;
     descriptor_configuration[offset - 8] = bInterval;
+    // wDescriptorLength low byte; the high byte (0x01) is the same for both, see
+    // the static_asserts after desc_hid_report_ds / desc_hid_report_dse.
     if (ds_mode()) {
-        descriptor_configuration[offset - 16] = 0x41;
+        descriptor_configuration[offset - 16] = 0x49; // 329
     }else {
-        descriptor_configuration[offset - 16] = 0xB5;
+        descriptor_configuration[offset - 16] = 0xBD; // 445
     }
 
     // Wake / Game Bar are runtime features. Advertise REMOTE_WAKEUP only when wake is
@@ -651,10 +653,14 @@ uint8_t const desc_hid_report_ds[] = {
     0x09, 0x3A, //   Usage (Vendor 0x3A)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xFA, //   Report ID (-6): companion protocol (companion.cpp)
+    0x09, 0x3B, //   Usage (Vendor 0x3B)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
     0xC0, // End Collection
-    // 321 bytes
+    // 329 bytes
 };
-static_assert(sizeof(desc_hid_report_ds) == 321);
+static_assert(sizeof(desc_hid_report_ds) == 329);
 
 uint8_t const desc_hid_report_dse[] = {
     0x05, 0x01, // Usage Page (Generic Desktop Ctrls)
@@ -872,10 +878,14 @@ uint8_t const desc_hid_report_dse[] = {
     0x09, 0x3A, //   Usage (Vendor 0x3A)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    0x85, 0xFA, //   Report ID (-6): companion protocol (companion.cpp)
+    0x09, 0x3B, //   Usage (Vendor 0x3B)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
     0xC0, // End Collection
-    // 437 bytes
+    // 445 bytes
 };
-static_assert(sizeof(desc_hid_report_dse) == 437);
+static_assert(sizeof(desc_hid_report_dse) == 445);
 
 #ifdef ENABLE_WAKE_HID
 // 41-byte boot-keyboard report descriptor (modifier byte + reserved + 6 keycodes,
@@ -980,7 +990,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
                 }
             } else {
                 chr_count = board_usb_get_serial(_desc_str + 1, 32) + 1;
-                _desc_str[chr_count] = '2'; // refresh windows cache (bumped for 2-ch mic)
+                _desc_str[chr_count] = '3'; // refresh windows cache (bumped for the 0xFA companion report)
             }
             break;
 

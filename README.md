@@ -13,7 +13,10 @@ This fork of [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) adds a **Ni
   - Hold 1–3 s: loop.
   - Hold 3 s: arm recording. Recording starts when you release.
   - Mute alone stops recording or playback.
+  - A single tap starts after 0.3 s, so a double tap can still become turbo.
+  - During playback your own presses are combined with the macro output; they are never saved into the slot.
   - Clear a slot: arm recording, release everything, then press Mute with no input. An empty recording saves the slot as empty.
+- **Turbo** (Switch mode). Hold Mute and double tap ○/✕/△/□ or L1/R1/L2/R2 to toggle turbo for that button; tap Mute alone (with nothing playing) to turn all turbo off. Held turbo buttons repeat 10 times a second by default (2–30).
 - **Vibration strength** (Switch mode). Mute + D-pad ↑/↓ steps through levels 0–5: 0 is off, then 20 % steps. The default is 3 (60 %), and 5 matches the old strength. The level shows on the DualSense player LEDs, with a short test pulse.
 - **Trigger modes** (Switch mode). Mute + D-pad →/← cycles 1 Normal, 2 Click, 3 Short (button-like) and 4 Auto (vibrating). These use DualSense adaptive trigger effects, and ZL/ZR fire at the matching point of the travel. The mode number shows as mute LED blinks. Both settings are saved in flash.
 - **Switch 2 wake from sleep** (Switch mode). Press PS while the console sleeps and the console turns on. Then press PS once more to reconnect the DualSense.
@@ -21,6 +24,7 @@ This fork of [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) adds a **Ni
   - **Learn once:** plug the dongle into a PC or charger (not the dock), connect the DualSense and hold **Create + Options + △ for 3 s**. The LED blinks slowly. Put the console to sleep and press HOME on a detached Joy-Con 2. The LED blinks 5× fast when the beacon is saved.
   - **Why PS twice:** when the console wakes, the dock cycles USB power, which reboots the dongle and drops the DualSense link.
 - In Switch mode the dongle stays on the USB bus without a controller, so the Switch sees an idle wired Pro Controller.
+- **PC manager app:** [DS5 Dongle Manager](https://github.com/DoorWarning/ds5_dongle_manager) switches PC/NS mode, edits the PC settings, and in NS mode edits vibration (1 % steps), each trigger mode's L2/R2 effect and fire point, turbo, and macros step by step. It can also learn or forget the wake beacon.
 
 Details and findings, in Korean: [README.KO.md](./README.KO.md).
 

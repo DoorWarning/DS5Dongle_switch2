@@ -3,6 +3,7 @@
 //
 
 #include "switch_pro.h"
+#include "companion.h"
 #include "macro.h"
 
 #include <algorithm>
@@ -649,6 +650,11 @@ void queue_subcommand_reply(uint8_t subcommand, uint8_t const *request_data, uin
             }
             break;
 
+        case COMPANION_SUBCOMMAND:
+            // PC manager app (companion.cpp): reply in the subcommand reply data.
+            companion_handle(request_data, request_len, payload + 14, sizeof(payload) - 14);
+            break;
+
         case 0x21:
             payload[12] = 0xA0;
             payload[14] = 0x01;
@@ -743,7 +749,7 @@ void switch_pro_on_ds5_input(const USBGetStateData &ds5) {
     if (ds5.ButtonCross) state[2] |= 0x04;    // South
     if (ds5.ButtonCircle) state[2] |= 0x08;   // East
     if (ds5.ButtonR1) state[2] |= 0x40;
-    if (switch_settings_trigger_pressed(ds5.ButtonR2, ds5.TriggerRight)) state[2] |= 0x80;
+    if (switch_settings_trigger_pressed(false, ds5.ButtonR2, ds5.TriggerRight)) state[2] |= 0x80;
 
     if (ds5.ButtonCreate) state[3] |= 0x01;  // Minus
     if (ds5.ButtonOptions) state[3] |= 0x02; // Plus
@@ -754,11 +760,25 @@ void switch_pro_on_ds5_input(const USBGetStateData &ds5) {
 
     state[4] |= dpad_to_bits(ds5.DPad);
     if (ds5.ButtonL1) state[4] |= 0x40;
-    if (switch_settings_trigger_pressed(ds5.ButtonL2, ds5.TriggerLeft)) state[4] |= 0x80;
+    if (switch_settings_trigger_pressed(true, ds5.ButtonL2, ds5.TriggerLeft)) state[4] |= 0x80;
 
     encode_stick(state, 5, u8_to_u12(ds5.LeftStickX), u8_to_u12_inverted(ds5.LeftStickY));
     encode_stick(state, 8, u8_to_u12(ds5.RightStickX), u8_to_u12_inverted(ds5.RightStickY));
-    macro_process(state + 2, ds5.ButtonMute, ds5.ButtonCircle, ds5.ButtonCross, ds5.ButtonTriangle, ds5.ButtonSquare);
+    const MacroInput macro_input{
+        .mute = static_cast<bool>(ds5.ButtonMute),
+        .circle = static_cast<bool>(ds5.ButtonCircle),
+        .cross = static_cast<bool>(ds5.ButtonCross),
+        .triangle = static_cast<bool>(ds5.ButtonTriangle),
+        .square = static_cast<bool>(ds5.ButtonSquare),
+        .l1 = static_cast<bool>(ds5.ButtonL1),
+        .r1 = static_cast<bool>(ds5.ButtonR1),
+        .l2 = (state[4] & 0x80) != 0,
+        .r2 = (state[2] & 0x80) != 0,
+        .other = ds5.DPad != None || ds5.ButtonL3 || ds5.ButtonR3 || ds5.ButtonCreate ||
+                 ds5.ButtonOptions || ds5.ButtonHome || ds5.ButtonPad,
+    };
+    switch_settings_apply_turbo(state + 2);
+    macro_process(state + 2, macro_input);
     switch_settings_on_input(ds5, state + 2);
 
     const bool has_imu = switch_pro_imu_enabled;

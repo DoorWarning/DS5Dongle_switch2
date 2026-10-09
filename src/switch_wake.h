@@ -11,3 +11,8 @@ void switch_wake_task();
 // Store a wake beacon (sender address big-endian, 31-byte payload) in flash. Works in
 // any mode; the BLE scan experiment uses it too. Main loop only.
 bool switch_wake_store_beacon(const uint8_t addr[6], const uint8_t data[31]);
+bool switch_wake_beacon_learned();
+// Manager app control (USB callback context: only sets requests for switch_wake_task).
+void switch_wake_set_learning(bool on);
+bool switch_wake_learning();
+void switch_wake_forget();

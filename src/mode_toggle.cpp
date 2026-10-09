@@ -11,9 +11,18 @@
 namespace {
 constexpr int64_t MODE_TOGGLE_HOLD_US = 2000000;
 
+constexpr uint8_t NO_MODE = 0xFF;
+
 absolute_time_t combo_since = nil_time;
 bool combo_fired = false;
 bool toggle_requested = false;
+uint8_t requested_mode = NO_MODE;           // set by mode_request() (companion app)
+absolute_time_t requested_at = nil_time;    // when to act on it
+}
+
+void mode_request(uint8_t mode, uint32_t delay_ms) {
+    requested_mode = mode;
+    requested_at = make_timeout_time_ms(delay_ms);
 }
 
 void mode_toggle_on_input(bool create, bool options, bool mute) {
@@ -36,16 +45,22 @@ void mode_toggle_on_input(bool create, bool options, bool mute) {
 }
 
 void mode_toggle_task() {
-    if (!toggle_requested) {
+    const bool requested = requested_mode != NO_MODE && time_reached(requested_at);
+    if (!toggle_requested && !requested) {
         return;
     }
-    toggle_requested = false;
 
     Config_body next = get_config();
-    next.controller_mode = next.controller_mode == ControllerMode_SwitchPro
-                               ? ControllerMode_Auto
-                               : ControllerMode_SwitchPro;
-    printf("[Mode] toggle -> %u\n", next.controller_mode);
+    if (requested) {
+        next.controller_mode = requested_mode;
+    } else {
+        next.controller_mode = next.controller_mode == ControllerMode_SwitchPro
+                                   ? ControllerMode_Auto
+                                   : ControllerMode_SwitchPro;
+    }
+    toggle_requested = false;
+    requested_mode = NO_MODE;
+    printf("[Mode] set -> %u\n", next.controller_mode);
     set_config(next);
     watchdog_update();
     config_save();

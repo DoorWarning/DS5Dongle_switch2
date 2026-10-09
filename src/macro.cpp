@@ -1,3 +1,18 @@
+// Switch Pro mode macros and turbo gestures. While Mute is held, ○✕△□ and
+// L1/R1/L2/R2 are not passed to the Switch.
+//
+//  - Mute + slot button (○✕△□) held RECORD_HOLD_US: arm recording; recording
+//    starts once everything is released, and a Mute press saves it.
+//  - Mute + slot button tapped: play once, after DOUBLE_TAP_MS so a double tap
+//    can still turn into turbo. Held PLAY_LOOP_HOLD_US or more: loop.
+//  - Mute + double tap on ○✕△□ or L1/R1/L2/R2: toggle turbo for that button
+//    (switch_settings.cpp pulses it).
+//  - Mute tapped alone: stop playback, or clear turbo when nothing plays.
+//
+// During playback the macro's buttons are OR-ed with the live input and its
+// sticks win while they are off center; nothing is written back to the slot.
+// The manager app can read and rewrite slots (macro_read / macro_edit_*).
+
 #include "macro.h"
 
 #include <cstdio>
@@ -6,6 +21,7 @@
 
 #include "bt.h"
 #include "config.h"
+#include "switch_settings.h"
 #include "utils.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
@@ -16,12 +32,15 @@
 
 namespace {
 
-constexpr uint8_t MACRO_SLOTS = 4;
 constexpr uint32_t MACRO_MAGIC = 0x4D43524F;
 constexpr uint32_t MACRO_FLASH_OFFSET =
     PICO_FLASH_BANK_STORAGE_OFFSET - FLASH_SECTOR_SIZE - MACRO_SLOTS * FLASH_SECTOR_SIZE;
 constexpr uint64_t PLAY_LOOP_HOLD_US = 1000000;
 constexpr uint64_t RECORD_HOLD_US = 3000000;
+// Gesture timers are 32-bit milliseconds: this state sits in .bss in PC mode too.
+constexpr uint32_t DOUBLE_TAP_MS = 300;
+constexpr uint32_t MUTE_TAP_MS = 1000;
+constexpr uint32_t EDIT_TIMEOUT_MS = 10000; // app went away mid-transfer
 constexpr uint32_t MAX_EVENT_MS = 60000;
 constexpr int STICK_EVENT_DELTA = 64;
 constexpr int STICK_DEADZONE = 200;
@@ -33,6 +52,7 @@ struct __attribute__((packed)) MacroEvent {
     uint8_t sticks[6];
     uint8_t reserved;
 };
+static_assert(sizeof(MacroEvent) == MACRO_EVENT_SIZE);
 
 struct __attribute__((packed)) MacroHeader {
     uint32_t magic;
@@ -56,15 +76,20 @@ static_assert(MACRO_FLASH_OFFSET % FLASH_SECTOR_SIZE == 0);
 enum class State : uint8_t {
     Idle,
     Chord,
+    TapWait, // slot button tapped: play unless a second tap follows
     RecordArmed,
     Recording,
     Playing,
 };
 
+// Turbo bit for each slot button, in slot order ○✕△□.
+constexpr uint8_t SLOT_TURBO_BIT[MACRO_SLOTS] = {TURBO_CIRCLE, TURBO_CROSS, TURBO_TRIANGLE, TURBO_SQUARE};
+constexpr uint8_t SHOULDER_BITS[4] = {TURBO_L1, TURBO_R1, TURBO_L2, TURBO_R2};
+
 // Saved slots are played straight from XIP flash. Only the slot being recorded
-// lives in RAM, and only in Switch Pro mode: PC mode has just a few KB of heap
-// left after core1's opus allocations, so this buffer comes from the heap that
-// Switch mode frees by skipping opus (see core1_entry in audio.cpp).
+// (or edited by the app) lives in RAM, and only in Switch Pro mode: PC mode has
+// just a few KB of heap left after core1's opus allocations, so this buffer comes
+// from the heap that Switch mode frees by skipping opus (see core1_entry in audio.cpp).
 MacroSlot *rec_slot = nullptr;
 bool slot_valid[MACRO_SLOTS]{};
 
@@ -73,6 +98,14 @@ bool prev_mute = false;
 bool mute_consumed = false;
 int chord_slot = -1;
 uint64_t chord_start_us = 0;
+int tap_slot = -1;
+uint32_t tap_at_ms = 0;
+int ignore_face = -1; // the second tap of a turbo double tap, until it is released
+
+bool mute_alone = false; // Mute pressed with nothing else so far
+uint32_t mute_down_ms = 0;
+bool prev_shoulder[4]{};
+uint32_t shoulder_tap_ms[4]{};
 
 int active_slot = -1;
 uint16_t rec_count = 0;
@@ -83,6 +116,8 @@ uint64_t play_event_start_us = 0;
 bool play_loop = false;
 
 int pending_save_slot = -1;
+int edit_slot = -1; // slot the app is rewriting into rec_slot
+uint32_t edit_touch_ms = 0;
 
 uint32_t slot_crc(const MacroSlot &slot) {
     return crc32(reinterpret_cast<const uint8_t *>(slot.events), slot.header.count * sizeof(MacroEvent));
@@ -129,7 +164,7 @@ void set_mute_light(MuteLight::MuteLight mode) {
 }
 
 void start_playback(int slot, bool loop) {
-    if (!slot_valid[slot] || play_slot(slot).header.count == 0) {
+    if (!slot_valid[slot] || slot == edit_slot || play_slot(slot).header.count == 0) {
         return;
     }
     active_slot = slot;
@@ -172,6 +207,17 @@ void close_last_event(uint64_t now) {
     rec_slot->events[rec_count - 1].dur_ms = static_cast<uint16_t>(ms);
 }
 
+void seal_slot(int slot, uint16_t count) {
+    MacroSlot &s = *rec_slot;
+    s.header.magic = MACRO_MAGIC;
+    s.header.count = count;
+    s.header.reserved = 0;
+    s.header.reserved2 = 0;
+    s.header.crc = slot_crc(s);
+    slot_valid[slot] = count > 0;
+    pending_save_slot = slot;
+}
+
 void finish_recording(uint64_t now) {
     close_last_event(now);
     MacroSlot &slot = *rec_slot;
@@ -183,13 +229,7 @@ void finish_recording(uint64_t now) {
         memmove(slot.events, slot.events + start, (rec_count - start) * sizeof(MacroEvent));
     }
     const uint16_t count = start < rec_count ? rec_count - start : 0;
-    slot.header.magic = MACRO_MAGIC;
-    slot.header.count = count;
-    slot.header.reserved = 0;
-    slot.header.reserved2 = 0;
-    slot.header.crc = slot_crc(slot);
-    slot_valid[active_slot] = count > 0;
-    pending_save_slot = active_slot;
+    seal_slot(active_slot, count);
     printf("[Macro] recorded slot %d events=%u\n", active_slot, count);
     state = State::Idle;
     active_slot = -1;
@@ -238,6 +278,28 @@ void apply_playback(uint8_t io[9], uint64_t now) {
     }
 }
 
+// Mute + double tap on L1/R1/L2/R2 toggles turbo for that button.
+void shoulder_gestures(const MacroInput &in, uint32_t now) {
+    const bool pressed[4] = {in.l1, in.r1, in.l2, in.r2};
+    for (int i = 0; i < 4; i++) {
+        const bool edge = in.mute && pressed[i] && !prev_shoulder[i];
+        prev_shoulder[i] = pressed[i];
+        if (!in.mute) {
+            shoulder_tap_ms[i] = 0;
+            continue;
+        }
+        if (!edge) {
+            continue;
+        }
+        if (shoulder_tap_ms[i] != 0 && now - shoulder_tap_ms[i] <= DOUBLE_TAP_MS) {
+            shoulder_tap_ms[i] = 0;
+            switch_settings_toggle_turbo(SHOULDER_BITS[i]);
+        } else {
+            shoulder_tap_ms[i] = now;
+        }
+    }
+}
+
 void save_flash_op(void *param) {
     const int slot = *static_cast<int *>(param);
     const uint32_t offset = MACRO_FLASH_OFFSET + slot * FLASH_SECTOR_SIZE;
@@ -264,23 +326,48 @@ void macro_init() {
     }
 }
 
-void macro_process(uint8_t io[9], bool mute, bool circle, bool cross, bool triangle, bool square) {
+void macro_process(uint8_t io[9], const MacroInput &in) {
     if (rec_slot == nullptr) {
         return;
     }
     const uint64_t now = time_us_64();
+    const uint32_t now_ms = static_cast<uint32_t>(now / 1000);
+    const bool mute = in.mute;
     const bool mute_edge = mute && !prev_mute;
+    const bool mute_release = !mute && prev_mute;
     prev_mute = mute;
 
     int face = -1;
-    if (circle) face = 0;
-    else if (cross) face = 1;
-    else if (triangle) face = 2;
-    else if (square) face = 3;
+    if (in.circle) face = 0;
+    else if (in.cross) face = 1;
+    else if (in.triangle) face = 2;
+    else if (in.square) face = 3;
+    if (face != ignore_face) {
+        ignore_face = -1;
+    } else {
+        face = -1;
+    }
+
+    // A Mute tap with nothing else pressed clears turbo (when it did not stop a macro).
+    if (mute_edge) {
+        mute_alone = !mute_consumed && (state == State::Idle);
+        mute_down_ms = now_ms;
+    }
+    if (mute && (face >= 0 || in.l1 || in.r1 || in.l2 || in.r2 || in.other)) {
+        mute_alone = false;
+    }
+    if (mute_release) {
+        if (mute_alone && state == State::Idle && now_ms - mute_down_ms < MUTE_TAP_MS) {
+            switch_settings_clear_turbo();
+        }
+        mute_alone = false;
+    }
 
     if (!mute) {
         mute_consumed = false;
     }
+
+    shoulder_gestures(in, now_ms);
 
     switch (state) {
         case State::Recording:
@@ -303,11 +390,28 @@ void macro_process(uint8_t io[9], bool mute, bool circle, bool cross, bool trian
 
         case State::RecordArmed:
             // rec_slot is still busy until the previous recording is flashed.
-            if (!mute && face < 0 && pending_save_slot < 0) {
+            if (!mute && face < 0 && pending_save_slot < 0 && edit_slot < 0) {
                 state = State::Recording;
                 rec_count = 0;
                 push_event(io, now);
                 printf("[Macro] recording slot %d\n", active_slot);
+            }
+            break;
+
+        case State::TapWait:
+            if (mute && face == tap_slot && now_ms - tap_at_ms <= DOUBLE_TAP_MS) {
+                state = State::Idle;
+                ignore_face = tap_slot;
+                switch_settings_toggle_turbo(SLOT_TURBO_BIT[tap_slot]);
+                tap_slot = -1;
+                break;
+            }
+            if (!mute || face >= 0 || now_ms - tap_at_ms > DOUBLE_TAP_MS) {
+                const int slot = tap_slot;
+                state = State::Idle;
+                tap_slot = -1;
+                mute_consumed = true;
+                start_playback(slot, false);
             }
             break;
 
@@ -320,12 +424,14 @@ void macro_process(uint8_t io[9], bool mute, bool circle, bool cross, bool trian
             if (face != chord_slot) {
                 const uint64_t held = now - chord_start_us;
                 const int slot = chord_slot;
-                state = State::Idle;
                 chord_slot = -1;
-                mute_consumed = true;
                 if (held < PLAY_LOOP_HOLD_US) {
-                    start_playback(slot, false);
+                    state = State::TapWait;
+                    tap_slot = slot;
+                    tap_at_ms = now_ms;
                 } else {
+                    state = State::Idle;
+                    mute_consumed = true;
                     start_playback(slot, true);
                 }
                 break;
@@ -350,19 +456,24 @@ void macro_process(uint8_t io[9], bool mute, bool circle, bool cross, bool trian
     }
 
     if (mute) {
-        io[0] &= static_cast<uint8_t>(~0x0F);
+        io[0] &= static_cast<uint8_t>(~0xCF); // ○✕△□, R, ZR
+        io[2] &= static_cast<uint8_t>(~0xC0); // L, ZL
     }
 }
 
 void macro_task() {
+    if (edit_slot >= 0 && to_ms_since_boot(get_absolute_time()) - edit_touch_ms > EDIT_TIMEOUT_MS) {
+        printf("[Macro] app edit of slot %d timed out\n", edit_slot);
+        edit_slot = -1;
+    }
     if (pending_save_slot < 0) {
         return;
     }
     int slot = pending_save_slot;
-    pending_save_slot = -1;
     watchdog_update();
     const int rc = flash_safe_execute(save_flash_op, &slot, 1000);
     watchdog_update();
+    pending_save_slot = -1; // rec_slot is free again only after it reached flash
     printf("[Macro] save slot %d rc=%d\n", slot, rc);
 }
 
@@ -379,4 +490,83 @@ void macro_restore_mute_light() {
             set_mute_light(MuteLight::Off);
             break;
     }
+}
+
+MacroStatus macro_status(int8_t &slot) {
+    slot = static_cast<int8_t>(active_slot);
+    if (rec_slot == nullptr) {
+        return MacroStatus::Unavailable;
+    }
+    switch (state) {
+        case State::RecordArmed:
+        case State::Recording:
+            return MacroStatus::Recording;
+        case State::Playing:
+            return MacroStatus::Playing;
+        default:
+            return MacroStatus::Idle;
+    }
+}
+
+uint16_t macro_max_events() {
+    return MAX_EVENTS;
+}
+
+uint16_t macro_event_count(int slot) {
+    if (rec_slot == nullptr || slot < 0 || slot >= MACRO_SLOTS || !slot_valid[slot]) {
+        return 0;
+    }
+    return play_slot(slot).header.count;
+}
+
+uint16_t macro_read(int slot, uint16_t offset, uint8_t *out, uint16_t len) {
+    const uint16_t total = macro_event_count(slot) * sizeof(MacroEvent);
+    if (offset >= total) {
+        return 0;
+    }
+    const uint16_t n = len < total - offset ? len : total - offset;
+    memcpy(out, reinterpret_cast<const uint8_t *>(play_slot(slot).events) + offset, n);
+    return n;
+}
+
+bool macro_edit_begin(int slot) {
+    if (rec_slot == nullptr || slot < 0 || slot >= MACRO_SLOTS || pending_save_slot >= 0 ||
+        state == State::RecordArmed || state == State::Recording) {
+        return false;
+    }
+    if (state == State::Playing && active_slot == slot) {
+        stop_playback();
+    }
+    memset(rec_slot, 0, sizeof(MacroSlot));
+    edit_slot = slot;
+    edit_touch_ms = to_ms_since_boot(get_absolute_time());
+    printf("[Macro] app editing slot %d\n", slot);
+    return true;
+}
+
+bool macro_edit_write(uint16_t offset, const uint8_t *data, uint16_t len) {
+    if (edit_slot < 0 || offset + len > MAX_EVENTS * sizeof(MacroEvent)) {
+        return false;
+    }
+    memcpy(reinterpret_cast<uint8_t *>(rec_slot->events) + offset, data, len);
+    edit_touch_ms = to_ms_since_boot(get_absolute_time());
+    return true;
+}
+
+bool macro_edit_commit(uint16_t count) {
+    if (edit_slot < 0 || count > MAX_EVENTS) {
+        return false;
+    }
+    for (uint16_t i = 0; i < count; i++) {
+        MacroEvent &ev = rec_slot->events[i];
+        if (ev.dur_ms == 0) {
+            ev.dur_ms = 1;
+        }
+        ev.reserved = 0;
+    }
+    const int slot = edit_slot;
+    edit_slot = -1;
+    seal_slot(slot, count); // count 0 clears the slot
+    printf("[Macro] app saved slot %d events=%u\n", slot, count);
+    return true;
 }

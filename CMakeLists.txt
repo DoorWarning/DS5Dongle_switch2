@@ -129,6 +129,7 @@ add_executable(ds5-bridge
         src/macro.cpp
         src/switch_wake.cpp
         src/switch_settings.cpp
+        src/companion.cpp
 )
 
 if (ENABLE_DEBUG)

@@ -27,6 +27,7 @@
 #endif
 #include "config.h"
 #include "cmd.h"
+#include "companion.h"
 #include "dse.h"
 #include "status_gpio.h"
 #if ENABLE_BATT_LED
@@ -206,6 +207,10 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     (void) buffer;
     (void) reqlen;
 
+    if (report_id == COMPANION_REPORT_ID && !is_switch_pro_mode()) {
+        return companion_feature_get(buffer, reqlen);
+    }
+
     if (is_pico_cmd(report_id)) {
         return pico_cmd_get(report_id, buffer, reqlen);
     }
@@ -262,6 +267,11 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     (void) report_type;
     (void) buffer;
     (void) bufsize;
+
+    if (report_id == COMPANION_REPORT_ID && !is_switch_pro_mode()) {
+        companion_feature_set(buffer, bufsize);
+        return;
+    }
 
     if (is_pico_cmd(report_id)) {
 #if ENABLE_VERBOSE
