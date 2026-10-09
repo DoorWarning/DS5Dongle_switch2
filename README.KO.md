@@ -176,6 +176,7 @@ cmake --build build --target ds5-bridge   # → build/ds5-bridge.uf2
 - `main`: 이 포크의 메인 브랜치 (원본 `c67c7f6` 위에 스위치 작업을 얹은 것)
 - 태그 `switch-wake-v1`: 실기에서 깨우기를 확인한 버전
 - 태그 `switch-v2`: v1 + 진동 세기·트리거 모드 (실기 확인)
+- 태그 `switch-v3`: v2 + 연사, PC 매니저 지원(모드 전환, NS 설정·매크로 편집, 깨우기 학습) (실기 확인)
 - `switch-wake-single-ps`: PS 한 번으로 끝내기 실험 (실패, 기록용)
 
 ## 크레딧과 라이선스
