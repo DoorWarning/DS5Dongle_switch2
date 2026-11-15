@@ -22,6 +22,7 @@
 #include "config.h"
 #include "macro.h"
 #include "mode_toggle.h"
+#include "switch_pro.h"
 #include "switch_settings.h"
 #include "switch_wake.h"
 
@@ -30,7 +31,7 @@ bool ds_mode();                       // usb_descriptors.cpp
 
 namespace {
 
-constexpr uint8_t PROTOCOL_VERSION = 2; // 2: NS settings, macro editing, wake learn
+constexpr uint8_t PROTOCOL_VERSION = 3; // 2: NS settings, macro editing, wake learn; 3: report cadence, latency
 constexpr uint32_t MODE_SWITCH_DELAY_MS = 300; // let the host read the reply first
 
 enum Command : uint8_t {
@@ -48,6 +49,7 @@ enum Command : uint8_t {
     CMD_MACRO_EDIT_BEGIN = 0x22,  // [slot]
     CMD_MACRO_EDIT_WRITE = 0x23,  // [offset u16, event bytes...]
     CMD_MACRO_EDIT_COMMIT = 0x24, // [count u16]; 0 clears the slot
+    CMD_LATENCY = 0x30,           // -> [DS5 input Hz u16, report Hz u16, input age us u16, USB bInterval]
 };
 
 enum Status : uint8_t {
@@ -239,6 +241,20 @@ uint16_t companion_handle(const uint8_t *request, uint16_t request_len, uint8_t 
                 status = STATUS_BAD_ARGS;
             }
             break;
+        case CMD_LATENCY: {
+            if (!is_switch_pro_mode()) {
+                status = STATUS_WRONG_MODE;
+                break;
+            }
+            uint16_t ds5_hz = 0, report_hz = 0, age_us = 0;
+            switch_pro_latency(ds5_hz, report_hz, age_us);
+            put_u16(data, ds5_hz);
+            put_u16(data + 2, report_hz);
+            put_u16(data + 4, age_us);
+            data[6] = switch_settings_usb_interval();
+            data_len = 7;
+            break;
+        }
         case CMD_MACRO_EDIT_COMMIT:
             if (len < 2 || !macro_edit_commit(u16_at(payload))) {
                 status = STATUS_BAD_ARGS;

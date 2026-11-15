@@ -27,6 +27,7 @@
 #include "tusb.h"
 #include "config.h"
 #include "usb.h"
+#include "switch_settings.h"
 
 #ifndef ENABLE_SERIAL
 #define ENABLE_SERIAL 0
@@ -449,6 +450,10 @@ static uint8_t const descriptor_keyboard_only[] = {
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void) index; // for multiple configurations
     if (is_switch_pro_mode()) {
+        // Endpoint bInterval bytes (IN, OUT) follow the report cadence setting.
+        const uint8_t interval = switch_settings_usb_interval();
+        descriptor_configuration_switch_pro[33] = interval;
+        descriptor_configuration_switch_pro[40] = interval;
         return descriptor_configuration_switch_pro;
     }
 #ifdef ENABLE_WAKE_HID

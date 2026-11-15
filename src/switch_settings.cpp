@@ -58,10 +58,23 @@ constexpr uint32_t PLAYER_LED_MS = 2000;
 constexpr uint32_t MUTE_BLINK_MS = 250;
 
 constexpr uint32_t RECORD_MAGIC = 0x53574354; // "SWCT"
-constexpr uint8_t RECORD_VERSION = 2;
+constexpr uint8_t RECORD_VERSION = 3;
+constexpr uint8_t DEFAULT_REPORT_MS = 15;
+constexpr uint8_t REAL_PRO_REPORT_MS = 15;
+constexpr uint8_t REAL_PRO_USB_INTERVAL = 8;
 // Below the wake beacon sector (switch_wake.cpp), which is below the macro slots.
 constexpr uint32_t SETTINGS_FLASH_OFFSET = PICO_FLASH_BANK_STORAGE_OFFSET - 7 * FLASH_SECTOR_SIZE;
 static_assert(SETTINGS_FLASH_OFFSET % FLASH_SECTOR_SIZE == 0);
+
+// switch-v3 record: NsSettings without report_ms / gyro_comp.
+constexpr size_t SETTINGS_V2_SIZE = offsetof(NsSettings, report_ms);
+struct __attribute__((packed)) SettingsRecordV2 {
+    uint32_t magic;
+    uint8_t version;
+    uint8_t reserved[3];
+    uint8_t settings[SETTINGS_V2_SIZE];
+    uint32_t crc;
+};
 
 // switch-v2 record: vibration level 0-5 and trigger mode only.
 struct __attribute__((packed)) SettingsRecordV1 {
@@ -121,6 +134,8 @@ void set_defaults(NsSettings &s) {
     s.trigger_mode = DEFAULT_TRIGGER_MODE;
     s.turbo_mask = 0;
     s.turbo_rate = DEFAULT_TURBO_RATE;
+    s.report_ms = DEFAULT_REPORT_MS;
+    s.gyro_comp = 0;
     default_slot(s.slots[0], NORMAL, 0);
     default_slot(s.slots[1], CLICK, 100);
     default_slot(s.slots[2], SHORT, 30);
@@ -129,16 +144,25 @@ void set_defaults(NsSettings &s) {
 
 bool settings_valid(const NsSettings &s) {
     return s.vib_percent <= 100 && s.trigger_mode >= 1 && s.trigger_mode <= NS_TRIGGER_SLOTS &&
-           s.turbo_rate >= TURBO_RATE_MIN && s.turbo_rate <= TURBO_RATE_MAX;
+           s.turbo_rate >= TURBO_RATE_MIN && s.turbo_rate <= TURBO_RATE_MAX &&
+           s.report_ms >= REPORT_MS_MIN && s.report_ms <= REPORT_MS_MAX && s.gyro_comp <= 1;
 }
 
 void load() {
     const auto *flash = reinterpret_cast<const uint8_t *>(XIP_BASE + SETTINGS_FLASH_OFFSET);
-    const auto &v2 = *reinterpret_cast<const SettingsRecord *>(flash);
+    const auto &v3 = *reinterpret_cast<const SettingsRecord *>(flash);
+    const auto &v2 = *reinterpret_cast<const SettingsRecordV2 *>(flash);
     const auto &v1 = *reinterpret_cast<const SettingsRecordV1 *>(flash);
-    if (v2.magic == RECORD_MAGIC && v2.version == RECORD_VERSION &&
-        v2.crc == record_crc(flash, offsetof(SettingsRecord, crc)) && settings_valid(v2.settings)) {
-        *ns = v2.settings;
+    if (v3.magic == RECORD_MAGIC && v3.version == RECORD_VERSION &&
+        v3.crc == record_crc(flash, offsetof(SettingsRecord, crc)) && settings_valid(v3.settings)) {
+        *ns = v3.settings;
+    } else if (v2.magic == RECORD_MAGIC && v2.version == 2 &&
+               v2.crc == record_crc(flash, offsetof(SettingsRecordV2, crc))) {
+        NsSettings next = *ns; // keeps the defaults for the v3 fields
+        memcpy(&next, v2.settings, SETTINGS_V2_SIZE);
+        if (settings_valid(next)) {
+            *ns = next;
+        }
     } else if (v1.magic == RECORD_MAGIC && v1.version == 1 &&
                v1.crc == record_crc(flash, offsetof(SettingsRecordV1, crc)) &&
                v1.vib_level <= VIB_STEPS && v1.trigger_mode >= 1 && v1.trigger_mode <= NS_TRIGGER_SLOTS) {
@@ -246,8 +270,8 @@ void switch_settings_init() {
     }
     set_defaults(*ns);
     load();
-    printf("[Settings] vibration %u%%, trigger mode %u, turbo 0x%02X at %u/s\n",
-           ns->vib_percent, ns->trigger_mode, ns->turbo_mask, ns->turbo_rate);
+    printf("[Settings] vibration %u%%, trigger mode %u, turbo 0x%02X at %u/s, report %u ms gyro_comp %u\n",
+           ns->vib_percent, ns->trigger_mode, ns->turbo_mask, ns->turbo_rate, ns->report_ms, ns->gyro_comp);
 }
 
 void switch_settings_on_input(const USBGetStateData &ds5, uint8_t io[9]) {
@@ -334,6 +358,23 @@ void switch_settings_blink_mute(uint8_t count) {
     mute_toggles_left = static_cast<uint8_t>(count * 2);
     mute_last_ms = 0;
     mute_lit = false;
+}
+
+uint32_t switch_settings_report_interval_us() {
+    return (ns != nullptr ? ns->report_ms : DEFAULT_REPORT_MS) * 1000u;
+}
+
+// Faster than a real Pro Controller: let the host poll every 1 ms so a
+// queued report does not wait for the next 8 ms poll.
+uint8_t switch_settings_usb_interval() {
+    return ns != nullptr && ns->report_ms < REAL_PRO_REPORT_MS ? 1 : REAL_PRO_USB_INTERVAL;
+}
+
+float switch_settings_gyro_scale() {
+    if (ns == nullptr || !ns->gyro_comp) {
+        return 1.0f;
+    }
+    return static_cast<float>(ns->report_ms) / REAL_PRO_REPORT_MS;
 }
 
 const NsSettings *switch_settings_get() {

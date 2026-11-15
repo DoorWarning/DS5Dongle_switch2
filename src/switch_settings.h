@@ -11,6 +11,9 @@ constexpr uint8_t NS_TRIGGER_SLOTS = 4;
 constexpr uint8_t NS_FFB_SIZE = 11;
 constexpr uint8_t TURBO_RATE_MIN = 2;
 constexpr uint8_t TURBO_RATE_MAX = 30;
+// Input report interval to the Switch. 15 ms is what a real Pro Controller sends.
+constexpr uint8_t REPORT_MS_MIN = 1; // USB full-speed interrupt minimum
+constexpr uint8_t REPORT_MS_MAX = 15;
 
 // Turbo bits (NsSettings::turbo_mask).
 enum TurboBit : uint8_t {
@@ -36,6 +39,9 @@ struct __attribute__((packed)) NsSettings {
     uint8_t turbo_mask;   // TurboBit
     uint8_t turbo_rate;   // presses per second, TURBO_RATE_MIN-TURBO_RATE_MAX
     NsTriggerSlot slots[NS_TRIGGER_SLOTS];
+    // Added in settings v3 (older blocks are 100 bytes; the app checks the size).
+    uint8_t report_ms;    // REPORT_MS_MIN-REPORT_MS_MAX
+    uint8_t gyro_comp;    // 1: scale gyro by report_ms / 15 (if the console assumes 15 ms per report)
 };
 
 void switch_settings_init();
@@ -60,3 +66,9 @@ void switch_settings_blink_mute(uint8_t count);
 const NsSettings *switch_settings_get();
 // Validates and applies a full settings block; false if out of range.
 bool switch_settings_set(const NsSettings &next);
+
+// Report cadence and USB endpoint interval (bInterval, used at enumeration).
+uint32_t switch_settings_report_interval_us();
+uint8_t switch_settings_usb_interval();
+// Gyro scale for the current cadence (1.0 unless gyro_comp is on).
+float switch_settings_gyro_scale();

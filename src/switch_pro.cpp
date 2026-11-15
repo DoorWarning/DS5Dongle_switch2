@@ -19,12 +19,15 @@
 
 namespace {
 
-constexpr uint32_t SWITCH_PRO_REPORT_INTERVAL_US = 15000;
+// Report interval comes from switch_settings_report_interval_us() (15 ms = real Pro Controller).
 constexpr uint32_t SWITCH_PRO_IMU_SAMPLE_INTERVAL_US = 5000;
 constexpr uint8_t SWITCH_PRO_REPORT_ID = 0x30;
 constexpr uint8_t SWITCH_PRO_REPORT_SIZE = 63;
 constexpr uint8_t SWITCH_PRO_IMU_SAMPLES = 3;
-constexpr uint8_t SWITCH_PRO_TIMER_STEP = SWITCH_PRO_IMU_SAMPLES;
+// The timer byte counts 5 ms units of real time (3 per report at 15 ms), so it
+// stays right when reports go out faster. Below 5 ms that would repeat a value,
+// so it then simply counts reports.
+constexpr uint32_t SWITCH_PRO_TIMER_UNIT_US = SWITCH_PRO_IMU_SAMPLE_INTERVAL_US;
 constexpr uint8_t SWITCH_PRO_IMU_HISTORY_SIZE = 24;
 constexpr uint8_t SWITCH_PRO_DEVICE_TYPE = 0x03;
 constexpr uint32_t DS5_SENSOR_TIMESTAMP_TICKS_PER_US = 3;
@@ -46,6 +49,14 @@ bool switch_pro_pending_report_ready = false;
 bool switch_pro_usb_enabled = false;
 bool switch_pro_imu_enabled = false;
 uint8_t switch_pro_timer = 0;
+uint32_t switch_pro_last_input_us = 0;
+uint32_t latency_window_us = 0;
+uint32_t latency_age_sum_us = 0;
+uint16_t latency_inputs = 0;
+uint16_t latency_reports = 0;
+uint16_t latency_ds5_hz = 0;
+uint16_t latency_report_hz = 0;
+uint16_t latency_age_us = 0;
 uint8_t switch_pro_mac[6] = {0x98, 0xB6, 0xE9, 0x00, 0x00, 0x01};
 bool switch_pro_ds5_calibration_loaded = false;
 
@@ -440,6 +451,7 @@ void encode_imu_samples(uint8_t state[SWITCH_PRO_REPORT_SIZE]) {
 
     const uint32_t sample_spacing_ticks =
         SWITCH_PRO_IMU_SAMPLE_INTERVAL_US * DS5_SENSOR_TIMESTAMP_TICKS_PER_US;
+    const float gyro_scale = switch_settings_gyro_scale();
 
     // SDL's Switch driver gives imuState[2] the oldest timestamp and
     // imuState[0] the newest one, so slot 0 in the packet is newest.
@@ -447,6 +459,11 @@ void encode_imu_samples(uint8_t state[SWITCH_PRO_REPORT_SIZE]) {
         SwitchImu sample{};
         const uint32_t target_ticks = latest_ticks - sample_spacing_ticks * i;
         if (sample_at_imu_timestamp(target_ticks, &sample)) {
+            if (gyro_scale != 1.0f) {
+                sample.gyro_x = static_cast<int16_t>(sample.gyro_x * gyro_scale);
+                sample.gyro_y = static_cast<int16_t>(sample.gyro_y * gyro_scale);
+                sample.gyro_z = static_cast<int16_t>(sample.gyro_z * gyro_scale);
+            }
             encode_imu_sample(state + 12 + i * 12, sample);
         }
     }
@@ -459,8 +476,11 @@ void build_input_report(uint8_t out[SWITCH_PRO_REPORT_SIZE]) {
         encode_imu_samples(out);
     }
     critical_section_exit(&switch_pro_cs);
-    out[0] = switch_pro_timer;
-    switch_pro_timer += SWITCH_PRO_TIMER_STEP;
+    if (switch_settings_report_interval_us() < SWITCH_PRO_TIMER_UNIT_US) {
+        out[0] = ++switch_pro_timer;
+    } else {
+        out[0] = static_cast<uint8_t>(time_us_32() / SWITCH_PRO_TIMER_UNIT_US);
+    }
 }
 
 void queue_input(uint8_t report_id, uint8_t const *payload, uint16_t len) {
@@ -689,7 +709,7 @@ void send_state_if_due() {
     }
 
     if (switch_pro_last_report_us != 0 &&
-        static_cast<uint32_t>(now - switch_pro_last_report_us) < SWITCH_PRO_REPORT_INTERVAL_US) {
+        static_cast<uint32_t>(now - switch_pro_last_report_us) < switch_settings_report_interval_us()) {
         return;
     }
 
@@ -698,6 +718,11 @@ void send_state_if_due() {
 
     if (tud_hid_report(SWITCH_PRO_REPORT_ID, state, sizeof(state))) {
         switch_pro_last_report_us = now;
+        latency_reports++;
+        const uint32_t age = now - switch_pro_last_input_us;
+        if (switch_pro_last_input_us != 0 && age < 100000) {
+            latency_age_sum_us += age;
+        }
     }
 }
 
@@ -740,6 +765,8 @@ void switch_pro_init() {
 }
 
 void switch_pro_on_ds5_input(const USBGetStateData &ds5) {
+    switch_pro_last_input_us = time_us_32();
+    latency_inputs++;
     uint8_t state[SWITCH_PRO_REPORT_SIZE]{};
     state[0] = 0x00; // timer/counter
     state[1] = switch_power_connection_info(ds5);
@@ -802,11 +829,27 @@ void switch_pro_task() {
     if (!is_switch_pro_mode()) {
         return;
     }
+    const uint32_t now = time_us_32();
+    if (now - latency_window_us >= 1000000) {
+        latency_ds5_hz = latency_inputs;
+        latency_report_hz = latency_reports;
+        latency_age_us = latency_reports > 0 ? static_cast<uint16_t>(std::min<uint32_t>(latency_age_sum_us / latency_reports, 0xFFFF)) : 0;
+        latency_inputs = 0;
+        latency_reports = 0;
+        latency_age_sum_us = 0;
+        latency_window_us = now;
+    }
     switch_hd_haptics_task();
     macro_task();
     switch_settings_task();
     drain_pending_report();
     send_state_if_due();
+}
+
+void switch_pro_latency(uint16_t &ds5_hz, uint16_t &report_hz, uint16_t &age_us) {
+    ds5_hz = latency_ds5_hz;
+    report_hz = latency_report_hz;
+    age_us = latency_age_us;
 }
 
 uint16_t switch_pro_get_report(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
