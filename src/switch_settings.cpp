@@ -262,6 +262,9 @@ void change_trigger_mode(int delta) {
 } // namespace
 
 void switch_settings_init() {
+    if (!is_switch_pro_mode()) {
+        return; // PC mode: keep the heap for opus (see the header comment)
+    }
     if (ns == nullptr) {
         ns = static_cast<NsSettings *>(malloc(sizeof(NsSettings)));
         if (ns == nullptr) {

@@ -99,6 +99,45 @@ void __not_in_flash_func(interrupt_loop)() {
     }
 }
 
+// Controller put on its charging dock: disconnect it to save its battery, and in
+// NS mode optionally put the Switch to sleep. (upstream 2e79733, 3fa663e)
+// Acts only on the moment the dock bit turns on while the controller is already
+// connected: a bit that reads set from the first frame of a connection (already
+// docked, or a controller that reports it all the time) must never fire, or every
+// reconnect would end in a sleep/disconnect loop.
+// Kept out of RAM (on_bt_data below is __not_in_flash_func): RAM code comes out
+// of the heap that PC mode's opus needs.
+static __noinline bool dock_disconnect(uint8_t status1) {
+    constexpr uint32_t NEW_CONNECTION_GAP_MS = 1000; // no frames this long = a new connection
+    static bool prev_docked = false;
+    static uint32_t last_frame_ms = 0;
+    const uint32_t now = to_ms_since_boot(get_absolute_time());
+    const bool first_frame = last_frame_ms == 0 || now - last_frame_ms > NEW_CONNECTION_GAP_MS;
+    last_frame_ms = now;
+
+    const bool docked = (status1 >> 6) & 1;
+    const bool placed = docked && !prev_docked && !first_frame;
+    prev_docked = docked;
+    if (!placed) {
+        return false;
+    }
+
+    const Config_body &cfg = get_config();
+    // NS mode: sleep_on_dock puts the Switch to sleep first; the DualSense is
+    // dropped (if disconnect_on_dock) once that button sequence is done.
+    if (is_switch_pro_mode() && cfg.sleep_on_dock && switch_pro_sleep_console(cfg.disconnect_on_dock)) {
+        printf("[BT] Dock detect (status1=0x%02X), console sleep\n", status1);
+        return false;
+    }
+    // No sleep sequence (off, or the console is not reading input): still honour
+    // disconnect_on_dock.
+    if (!cfg.disconnect_on_dock || !bt_disconnect()) {
+        return false;
+    }
+    printf("[BT] Dock detect (status1=0x%02X), disconnect\n", status1);
+    return true;
+}
+
 void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
     if (channel == INTERRUPT && len > 2 && data[1] == 0x31) {
@@ -110,15 +149,20 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
             }
             return;
         }
-        if (len >= 66) {
-            const auto *st = reinterpret_cast<const USBGetStateData *>(data + 3);
-            mode_toggle_on_input(st->ButtonCreate, st->ButtonOptions, st->ButtonMute);
-            switch_wake_on_input(st->ButtonCreate, st->ButtonOptions, st->ButtonTriangle);
+        // Everything below reads up to data + 3 + 63; a shorter frame would read
+        // stale bytes past its end (e.g. a false dock bit in data[56]). (upstream 8a25d78)
+        if (len < 3 + 63) {
+            return;
         }
+        const auto *st = reinterpret_cast<const USBGetStateData *>(data + 3);
+        mode_toggle_on_input(st->ButtonCreate, st->ButtonOptions, st->ButtonMute);
+        switch_wake_on_input(st->ButtonCreate, st->ButtonOptions, st->ButtonTriangle);
+
+        if (dock_disconnect(data[56])) {
+            return;
+        }
+
         if (is_switch_pro_mode()) {
-            if (len < 66) {
-                return;
-            }
             USBGetStateData ds5{};
             memcpy(&ds5, data + 3, sizeof(ds5));
             switch_pro_on_ds5_input(ds5);
@@ -252,6 +296,56 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
     return true;
 }
 
+static void forward_output_report(uint8_t const *data, uint16_t len) {
+    // An output report with no body has nothing to forward. (upstream 706828e)
+    if (len == 0) {
+        return;
+    }
+    uint8_t outputData[78]{};
+    outputData[0] = 0x31;
+    outputData[1] = reportSeqCounter << 4;
+    reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+    outputData[2] = 0x10;
+    SetStateData state{};
+    // A short report fills only what it carries; the rest stays zero instead
+    // of being read from past the end of the transfer.
+    memcpy(&state, data, len < sizeof(SetStateData) ? len : sizeof(SetStateData));
+
+    const auto &config = get_config();
+    if (config.trigger_reduce > 0) {
+        state.AllowMotorPowerLevel = 1;
+        state.TriggerMotorPowerReduction = config.trigger_reduce;
+    }
+    if (config.speaker_gain > 0) {
+        state.AllowAudioControl2 = 1;
+        state.SpeakerCompPreGain = config.speaker_gain;
+    }
+    if (config.mic_select != 0) {
+        state.AllowAudioControl = 1;
+        state.MicSelect = config.mic_select;
+        state.NoiseCancelEnable = 1;
+    }
+    // Linux hid-playstation sends AudioControl 0 / 0x30 on every headset
+    // plug/unplug; with NoiseCancelEnable cleared the speaker is attenuated,
+    // so keep it set here too. (upstream 77d378e)
+    if (state.AllowAudioControl) {
+        state.NoiseCancelEnable = 1;
+    }
+    if (config.lock_volume) {
+        state.AllowHeadphoneVolume = 0;
+        state.AllowMicVolume = 0;
+        state.AllowSpeakerVolume = 0;
+        state.AllowAudioMute = 0;
+        state.AllowMuteLight = 0;
+    }
+
+    memcpy(outputData + 3, &state, sizeof(SetStateData));
+    bt_write(outputData, sizeof(outputData));
+#if ENABLE_VERBOSE
+    printf_hexdump(outputData, sizeof(outputData));
+#endif
+}
+
 // Invoked when received SET_REPORT control request or
 // received data on OUT endpoint ( Report ID = 0, Type = 0 )
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
@@ -286,48 +380,13 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         return;
     }
 
-    // INTERRUPT OUT
-    if (report_id == 0) {
-        switch (buffer[0]) {
-            case 0x02: {
-                uint8_t outputData[78]{};
-                outputData[0] = 0x31;
-                outputData[1] = reportSeqCounter << 4;
-                reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
-                outputData[2] = 0x10;
-                SetStateData state{};
-                memcpy(&state,buffer + 1,sizeof(SetStateData));
-
-                const auto &config = get_config();
-                if (config.trigger_reduce > 0) {
-                    state.AllowMotorPowerLevel = 1;
-                    state.TriggerMotorPowerReduction = config.trigger_reduce;
-                }
-                if (config.speaker_gain > 0) {
-                    state.AllowAudioControl2 = 1;
-                    state.SpeakerCompPreGain = config.speaker_gain;
-                }
-                if (config.mic_select != 0) {
-                    state.AllowAudioControl = 1;
-                    state.MicSelect = config.mic_select;
-                    state.NoiseCancelEnable = 1;
-                }
-                if (config.lock_volume) {
-                    state.AllowHeadphoneVolume = 0;
-                    state.AllowMicVolume = 0;
-                    state.AllowSpeakerVolume = 0;
-                    state.AllowAudioMute = 0;
-                    state.AllowMuteLight = 0;
-                }
-
-                memcpy(outputData + 3, &state, sizeof(SetStateData));
-                bt_write(outputData, sizeof(outputData));
-#if ENABLE_VERBOSE
-                printf_hexdump(outputData,sizeof(outputData));
-#endif
-                break;
-            }
-        }
+    // Output report 0x02 arrives on the interrupt OUT endpoint (report_id 0,
+    // the id in buffer[0]) or, e.g. from HidD_SetOutputReport, as SET_REPORT
+    // on the control pipe (report_id 2, TinyUSB has stripped the id). (upstream 97d2c15)
+    if (report_id == 0 && bufsize > 0 && buffer[0] == 0x02) {
+        forward_output_report(buffer + 1, bufsize - 1);
+    } else if (report_type == HID_REPORT_TYPE_OUTPUT && report_id == 0x02) {
+        forward_output_report(buffer, bufsize);
     }
     if (report_id == 0x80 ||
         // DSE: Write Profile Block
@@ -372,8 +431,14 @@ int main() {
 #endif
 
     if (cyw43_arch_init()) {
-        printf("Failed to initialize CYW43\n");
-        return 1;
+        // Returning here hangs the board (the watchdog isn't armed yet) until
+        // it is unplugged; reboot instead so the next boot retries. (upstream 511a34a)
+        printf("Failed to initialize CYW43, rebooting\n");
+        sleep_ms(500);
+        watchdog_reboot(0, 0, 0);
+        while (true) {
+            tight_loop_contents();
+        }
     }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 
@@ -440,6 +505,7 @@ int main() {
         button_check();
         mode_toggle_task();
         switch_wake_task();
+        companion_task();
 #if DS5_BLE_SCAN
         ble_scan_task();
 #endif

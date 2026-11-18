@@ -1,7 +1,8 @@
 // Companion protocol for the PC manager app (ds5_dongle_manager).
 //
 // One command set, two transports:
-//  - DS5/DSE mode: vendor Feature report 0xFA (63 bytes). SET_REPORT carries a
+//  - DS5/DSE mode: vendor Feature report 0xFE (63 bytes). SET_REPORT carries
+//    COMPANION_MAGIC followed by a
 //    request, GET_REPORT returns the reply to the last request. 0xF6-0xF9 (the
 //    original web config protocol) are left alone.
 //  - Switch Pro mode: output report 0x01 with subcommand 0xE0 (outside the range
@@ -31,7 +32,8 @@ bool ds_mode();                       // usb_descriptors.cpp
 
 namespace {
 
-constexpr uint8_t PROTOCOL_VERSION = 3; // 2: NS settings, macro editing, wake learn; 3: report cadence, latency
+constexpr uint8_t PROTOCOL_VERSION = 4; // 2: NS settings, macro editing, wake learn; 3: report cadence, latency;
+                                        // 4: PC-mode report moved to 0xFE with COMPANION_MAGIC
 constexpr uint32_t MODE_SWITCH_DELAY_MS = 300; // let the host read the reply first
 
 enum Command : uint8_t {
@@ -44,6 +46,8 @@ enum Command : uint8_t {
     CMD_NS_SETTINGS_READ = 0x10,  // [offset] -> [total size, bytes...]
     CMD_NS_SETTINGS_WRITE = 0x11, // [offset, bytes...] into a staging copy
     CMD_NS_SETTINGS_APPLY = 0x12, // validate, apply and save the staging copy
+    // Both modes: Config_body is only reachable over 0xF6/0xF7 in PC mode.
+    CMD_DOCK = 0x13,              // [] -> [disconnect_on_dock, sleep_on_dock]; [d] or [d, s] sets (saved)
     CMD_MACRO_INFO = 0x20,        // -> [status, active slot, max events u16, count u16 x MACRO_SLOTS]
     CMD_MACRO_READ = 0x21,        // [slot, offset u16] -> event bytes
     CMD_MACRO_EDIT_BEGIN = 0x22,  // [slot]
@@ -73,6 +77,8 @@ constexpr uint8_t REPLY_HEADER = 4;
 constexpr uint8_t FEATURE_SIZE = 63;
 uint8_t feature_reply[FEATURE_SIZE]{};
 uint8_t feature_reply_len = 0;
+
+bool config_save_pending = false;
 
 // Staging copy for CMD_NS_SETTINGS_WRITE. Heap, Switch Pro mode only.
 NsSettings *ns_staging = nullptr;
@@ -151,6 +157,25 @@ uint16_t companion_handle(const uint8_t *request, uint16_t request_len, uint8_t 
         case CMD_WAKE_FORGET:
             switch_wake_forget();
             break;
+        case CMD_DOCK: {
+            Config_body &cfg = get_config();
+            if (len >= 1 && (payload[0] > 1 || (len >= 2 && payload[1] > 1))) {
+                status = STATUS_BAD_ARGS;
+                break;
+            }
+            if (len >= 1 && cfg.disconnect_on_dock != payload[0]) {
+                cfg.disconnect_on_dock = payload[0];
+                config_save_pending = true;
+            }
+            if (len >= 2 && cfg.sleep_on_dock != payload[1]) {
+                cfg.sleep_on_dock = payload[1];
+                config_save_pending = true;
+            }
+            data[0] = cfg.disconnect_on_dock;
+            data[1] = cfg.sleep_on_dock;
+            data_len = 2;
+            break;
+        }
         case CMD_NS_SETTINGS_READ: {
             const NsSettings *current = switch_settings_get();
             if (current == nullptr) {
@@ -272,8 +297,20 @@ uint16_t companion_handle(const uint8_t *request, uint16_t request_len, uint8_t 
     return REPLY_HEADER + data_len;
 }
 
+void companion_task() {
+    if (config_save_pending) {
+        config_save_pending = false;
+        config_save();
+    }
+}
+
 void companion_feature_set(const uint8_t *buffer, uint16_t len) {
-    feature_reply_len = static_cast<uint8_t>(companion_handle(buffer, len, feature_reply, sizeof(feature_reply)));
+    // Without the signature this is not ours (e.g. another tool's report): drop it.
+    if (len < 2 || buffer[0] != COMPANION_MAGIC[0] || buffer[1] != COMPANION_MAGIC[1]) {
+        feature_reply_len = 0;
+        return;
+    }
+    feature_reply_len = static_cast<uint8_t>(companion_handle(buffer + 2, len - 2, feature_reply, sizeof(feature_reply)));
 }
 
 uint16_t companion_feature_get(uint8_t *buffer, uint16_t reqlen) {

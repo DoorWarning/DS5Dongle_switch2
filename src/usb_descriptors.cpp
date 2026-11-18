@@ -658,7 +658,7 @@ uint8_t const desc_hid_report_ds[] = {
     0x09, 0x3A, //   Usage (Vendor 0x3A)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
-    0x85, 0xFA, //   Report ID (-6): companion protocol (companion.cpp)
+    0x85, 0xFE, //   Report ID (-2): companion protocol (companion.cpp); 0xFA/0xFB are upstream's button reports
     0x09, 0x3B, //   Usage (Vendor 0x3B)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
@@ -883,7 +883,7 @@ uint8_t const desc_hid_report_dse[] = {
     0x09, 0x3A, //   Usage (Vendor 0x3A)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
-    0x85, 0xFA, //   Report ID (-6): companion protocol (companion.cpp)
+    0x85, 0xFE, //   Report ID (-2): companion protocol (companion.cpp); 0xFA/0xFB are upstream's button reports
     0x09, 0x3B, //   Usage (Vendor 0x3B)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
@@ -995,7 +995,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
                 }
             } else {
                 chr_count = board_usb_get_serial(_desc_str + 1, 32) + 1;
-                _desc_str[chr_count] = '3'; // refresh windows cache (bumped for the 0xFA companion report)
+                _desc_str[chr_count] = '4'; // refresh windows cache (bumped when the companion report moved to 0xFE)
             }
             break;
 

@@ -487,7 +487,12 @@ void switch_wake_on_hci_event(uint8_t packet_type, const uint8_t *packet, uint16
 }
 
 void switch_wake_on_bt_connect() {
-    if (!is_switch_pro_mode() || !console_asleep) {
+    // The dock power-cycles the dongle when the console goes to sleep, and
+    // console_asleep only turns true after UNMOUNTED_ASLEEP_MS without
+    // enumeration. A PS press inside that window must still wake the console: an
+    // awake console has enumerated the dongle long before anyone reaches for PS,
+    // so "not enumerated right now" counts as asleep too.
+    if (!is_switch_pro_mode() || !(console_asleep || !usb_mounted())) {
         return;
     }
     if (!record_valid(stored_record())) {

@@ -140,6 +140,16 @@ void config_valid() {
         body->status_gpio_mode = 0;
         printf("[Config] status_gpio_mode is invalid\n");
     }
+    // Older saves end before these fields, so they read as 0xFF: default to off.
+    if (body->packet_mode > 1) {
+        body->packet_mode = 0;
+    }
+    if (body->disconnect_on_dock > 1) {
+        body->disconnect_on_dock = 0;
+    }
+    if (body->sleep_on_dock > 1) {
+        body->sleep_on_dock = 0;
+    }
 }
 
 void config_load() {

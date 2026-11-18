@@ -78,6 +78,9 @@ FIELDS = [
     ("lock_volume",        "u8",    lambda v: v in (0, 1),       "0/1 (ignore the volume change from SetStateData(game or software))"),
     ("status_gpio_pin",    "u8",    lambda v: 0 <= v <= 255,     "GPIO number (255 disables; firmware rejects board-reserved pins)"),
     ("status_gpio_mode",   "u8",    lambda v: v in (0, 1),       "0:pull high 1:200ms button pulse"),
+    ("packet_mode",        "u8",    lambda v: v in (0, 1),       "upstream audio packet mode (stored, unused)"),
+    ("disconnect_on_dock", "u8",    lambda v: v in (0, 1),       "0/1 (disconnect the controller on its charging dock)"),
+    ("sleep_on_dock",      "u8",    lambda v: v in (0, 1),       "0/1 (NS mode: put the Switch to sleep on the charging dock)"),
 ]
 FIELD_NAMES = [f[0] for f in FIELDS]
 # Little-endian, no padding -- matches __attribute__((packed)) Config_body.

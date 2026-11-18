@@ -34,6 +34,11 @@ struct __attribute__((packed)) Config_body {
     uint8_t lock_volume; // bool
     uint8_t status_gpio_pin; // board-usable GPIO, 0xff: disabled
     uint8_t status_gpio_mode; // 0: high while connected, 1: button pulse on connect
+    // Same order as upstream awalol/DS5Dongle, so its web config and config_tool
+    // read and write this layout correctly.
+    uint8_t packet_mode; // upstream audio packet mode; stored only, not used here yet
+    uint8_t disconnect_on_dock; // bool: disconnect the controller when it is put on its charging dock
+    uint8_t sleep_on_dock; // bool: on the charging dock, NS mode puts the Switch to sleep (PC sleep: upstream, not here yet)
 };
 
 struct __attribute__((packed)) Config {

@@ -7,6 +7,8 @@
 #include "macro.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "bt.h"
@@ -50,6 +52,14 @@ bool switch_pro_usb_enabled = false;
 bool switch_pro_imu_enabled = false;
 uint8_t switch_pro_timer = 0;
 uint32_t switch_pro_last_input_us = 0;
+// Console sleep sequence (switch_pro_sleep_console).
+enum class SleepStep : uint8_t { Idle, HoldHome, OpenMenu, PressA };
+constexpr uint32_t SLEEP_HOME_HOLD_US = 1500000; // long HOME press opens quick settings
+constexpr uint32_t SLEEP_MENU_WAIT_US = 1000000; // let the menu open
+constexpr uint32_t SLEEP_A_PRESS_US = 200000;    // A on Sleep Mode, the first item
+SleepStep sleep_step = SleepStep::Idle;
+uint32_t sleep_step_start_us = 0;
+bool sleep_disconnect_after = false;
 uint32_t latency_window_us = 0;
 uint32_t latency_age_sum_us = 0;
 uint16_t latency_inputs = 0;
@@ -94,7 +104,12 @@ struct TimedSwitchImu {
     bool valid = false;
 };
 
-TimedSwitchImu switch_pro_imu_history[SWITCH_PRO_IMU_HISTORY_SIZE]{};
+// Heap, allocated in Switch Pro mode only: PC mode has just a few KB of heap
+// left after core1's opus allocations, and every .bss byte comes out of it.
+struct ImuHistory {
+    TimedSwitchImu entries[SWITCH_PRO_IMU_HISTORY_SIZE];
+};
+ImuHistory *switch_pro_imu = nullptr;
 uint8_t switch_pro_imu_history_next = 0;
 
 uint16_t u8_to_u12(uint8_t value) {
@@ -314,7 +329,9 @@ void reset_state() {
     switch_pro_last_report_us = 0;
     switch_pro_ds5_calibration = {};
     switch_pro_ds5_calibration_loaded = false;
-    memset(switch_pro_imu_history, 0, sizeof(switch_pro_imu_history));
+    if (switch_pro_imu != nullptr) {
+        *switch_pro_imu = {};
+    }
     switch_pro_imu_history_next = 0;
 }
 
@@ -335,12 +352,17 @@ void encode_imu_sample(uint8_t *imu, const SwitchImu &sample) {
 }
 
 void reset_imu_history() {
-    memset(switch_pro_imu_history, 0, sizeof(switch_pro_imu_history));
+    if (switch_pro_imu != nullptr) {
+        *switch_pro_imu = {};
+    }
     switch_pro_imu_history_next = 0;
 }
 
 void push_imu_sample(const SwitchImu &sample, uint32_t timestamp_ticks) {
-    switch_pro_imu_history[switch_pro_imu_history_next] = {sample, timestamp_ticks, true};
+    if (switch_pro_imu == nullptr) {
+        return;
+    }
+    switch_pro_imu->entries[switch_pro_imu_history_next] = {sample, timestamp_ticks, true};
     switch_pro_imu_history_next = (switch_pro_imu_history_next + 1) % SWITCH_PRO_IMU_HISTORY_SIZE;
 }
 
@@ -371,13 +393,16 @@ SwitchImu lerp_imu_sample(const SwitchImu &older, const SwitchImu &newer, uint32
 }
 
 bool latest_imu_timestamp(uint32_t *timestamp_ticks) {
+    if (switch_pro_imu == nullptr) {
+        return false;
+    }
     const uint8_t latest_index =
         (switch_pro_imu_history_next + SWITCH_PRO_IMU_HISTORY_SIZE - 1) % SWITCH_PRO_IMU_HISTORY_SIZE;
-    if (!switch_pro_imu_history[latest_index].valid) {
+    if (!switch_pro_imu->entries[latest_index].valid) {
         return false;
     }
 
-    *timestamp_ticks = switch_pro_imu_history[latest_index].timestamp_ticks;
+    *timestamp_ticks = switch_pro_imu->entries[latest_index].timestamp_ticks;
     return true;
 }
 
@@ -385,7 +410,10 @@ bool nearest_imu_sample(uint32_t target_ticks, SwitchImu *sample) {
     bool found = false;
     uint32_t best_delta = 0;
 
-    for (const TimedSwitchImu &candidate : switch_pro_imu_history) {
+    if (switch_pro_imu == nullptr) {
+        return false;
+    }
+    for (const TimedSwitchImu &candidate : switch_pro_imu->entries) {
         if (!candidate.valid) {
             continue;
         }
@@ -407,7 +435,10 @@ bool sample_at_imu_timestamp(uint32_t target_ticks, SwitchImu *sample) {
     uint32_t older_distance = 0;
     uint32_t newer_distance = 0;
 
-    for (const TimedSwitchImu &candidate : switch_pro_imu_history) {
+    if (switch_pro_imu == nullptr) {
+        return false;
+    }
+    for (const TimedSwitchImu &candidate : switch_pro_imu->entries) {
         if (!candidate.valid) {
             continue;
         }
@@ -476,6 +507,14 @@ void build_input_report(uint8_t out[SWITCH_PRO_REPORT_SIZE]) {
         encode_imu_samples(out);
     }
     critical_section_exit(&switch_pro_cs);
+    if (sleep_step != SleepStep::Idle) {
+        // Only the sequence's buttons, sticks centred: nothing else may reach the menu.
+        out[2] = sleep_step == SleepStep::PressA ? 0x08 : 0x00; // A (East)
+        out[3] = sleep_step == SleepStep::HoldHome ? 0x10 : 0x00; // HOME
+        out[4] = 0x00;
+        encode_stick(out, 5, 2048, 2048);
+        encode_stick(out, 8, 2048, 2048);
+    }
     if (switch_settings_report_interval_us() < SWITCH_PRO_TIMER_UNIT_US) {
         out[0] = ++switch_pro_timer;
     } else {
@@ -752,6 +791,9 @@ SwitchImu switch_imu_from_ds5(const Ds5Imu &imu) {
 } // namespace
 
 void switch_pro_init() {
+    if (is_switch_pro_mode() && switch_pro_imu == nullptr) {
+        switch_pro_imu = static_cast<ImuHistory *>(calloc(1, sizeof(ImuHistory)));
+    }
     macro_init();
     switch_settings_init();
     if (!switch_pro_cs_ready) {
@@ -839,11 +881,42 @@ void switch_pro_task() {
         latency_age_sum_us = 0;
         latency_window_us = now;
     }
+    if (sleep_step != SleepStep::Idle) {
+        const uint32_t elapsed = now - sleep_step_start_us;
+        const uint32_t step_us = sleep_step == SleepStep::HoldHome ? SLEEP_HOME_HOLD_US
+                               : sleep_step == SleepStep::OpenMenu ? SLEEP_MENU_WAIT_US
+                                                                   : SLEEP_A_PRESS_US;
+        if (elapsed >= step_us) {
+            sleep_step_start_us = now;
+            if (sleep_step == SleepStep::HoldHome) {
+                sleep_step = SleepStep::OpenMenu;
+            } else if (sleep_step == SleepStep::OpenMenu) {
+                sleep_step = SleepStep::PressA;
+            } else {
+                sleep_step = SleepStep::Idle;
+                printf("[Switch] sleep sequence sent\n");
+                if (sleep_disconnect_after) {
+                    bt_disconnect();
+                }
+            }
+        }
+    }
     switch_hd_haptics_task();
     macro_task();
     switch_settings_task();
     drain_pending_report();
     send_state_if_due();
+}
+
+bool switch_pro_sleep_console(bool disconnect_after) {
+    if (sleep_step != SleepStep::Idle || !switch_pro_usb_enabled) {
+        return false;
+    }
+    sleep_disconnect_after = disconnect_after;
+    sleep_step = SleepStep::HoldHome;
+    sleep_step_start_us = time_us_32();
+    printf("[Switch] putting the console to sleep\n");
+    return true;
 }
 
 void switch_pro_latency(uint16_t &ds5_hz, uint16_t &report_hz, uint16_t &age_us) {

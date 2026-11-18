@@ -24,6 +24,7 @@ This fork of [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) adds a **Ni
   - **Learn once:** plug the dongle into a PC or charger (not the dock), connect the DualSense and hold **Create + Options + △ for 3 s**. The LED blinks slowly. Put the console to sleep and press HOME on a detached Joy-Con 2. The LED blinks 5× fast when the beacon is saved.
   - **Why PS twice:** when the console wakes, the dock cycles USB power, which reboots the dongle and drops the DualSense link.
 - In Switch mode the dongle stays on the USB bus without a controller, so the Switch sees an idle wired Pro Controller.
+- **Charging dock** (off by default, set in the manager). When the DualSense goes on its charging dock, the dongle can disconnect it (PC and NS mode), and in NS mode it can put the Switch to sleep first (holds HOME, then picks Sleep Mode). It reacts only when the controller is put on the dock while connected.
 - **Response speed** (Switch mode). The input report interval to the Switch can be set from 15 ms (a real Pro Controller, the default) down to 1 ms in the manager. Below 15 ms the USB endpoint is polled every 1 ms (applied after replugging). Tested on a Switch 2 at 5 ms and 1 ms, including gyro aiming.
 - **PC manager app:** [DS5 Dongle Manager](https://github.com/DoorWarning/ds5_dongle_manager) switches PC/NS mode, edits the PC settings, and in NS mode edits vibration (1 % steps), each trigger mode's L2/R2 effect and fire point, turbo, response speed, and macros step by step. It can also learn or forget the wake beacon.
 
